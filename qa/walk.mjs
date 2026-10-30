@@ -49,7 +49,12 @@ if (policy === 'parent') {
   await page.click('#map .n[data-code="K.OA.A.2"]'); await page.waitForTimeout(200); await shot('p2-node');
   const ex1 = await page.evaluate(() => $('explain').innerText.slice(0, 400));
   const hop = await page.$('#explain .hops .act'); const hopText = hop ? await hop.textContent() : null; if (hop) { await hop.click(); await page.waitForTimeout(200); await shot('p3-hop'); }
-  await page.click('#bScope'); await page.waitForTimeout(200); await shot('p4-whole');
+  await page.click('#bFitAll'); await page.waitForTimeout(500); await shot('p4-whole');
+  await page.evaluate(() => zoomBy(1.8)); await page.waitForTimeout(100); const vt1 = await page.evaluate(() => ({ ...PV.vt }));
+  const box = await (await page.$('#map')).boundingBox(); await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 30, { steps: 5 }); await page.mouse.up(); await page.waitForTimeout(100);
+  const vt2 = await page.evaluate(() => ({ ...PV.vt })); await shot('p4b-zoomed-dragged');
+  await page.click('#bFitMine'); await page.waitForTimeout(500);
+  console.log(JSON.stringify({ zoomDrag: { before: vt1, after: vt2, selStill: await page.evaluate(() => PV.sel) } }));
   await page.click('#tabs .act:nth-child(2)'); await page.waitForTimeout(200); await shot('p5-kid2');
   console.log(JSON.stringify({ policy, view, errors, ex1, hopText, sel: await page.evaluate(() => PV.sel) }, null, 1));
   await browser.close(); process.exit(0);

@@ -180,11 +180,19 @@
   html:not([data-view]) #parent,html:not([data-view]) #kid{display:none!important}
   .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px}
   .tabs .act[aria-pressed=true]{background:var(--ink);color:var(--paper)}
-  #map{width:100%;height:auto;display:block;overflow:visible}
+  .mapwrap{position:relative;height:380px;border:1.5px solid var(--ink);border-radius:12px;background:var(--card);overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+  #map{width:100%;height:100%;display:block;cursor:grab}
+  #map.drag{cursor:grabbing}
+  .mapbtns{position:absolute;right:8px;top:8px;display:flex;flex-direction:column;gap:6px}
+  .mapbtns .act{width:40px;height:40px;min-height:0;padding:0;font-size:20px;font-weight:800;background:var(--paper)}
   #map .n{cursor:pointer}
+  #map .n .lab{transition:opacity .2s}
+  #map.far .n .lab{opacity:0}
+  #map .n.nb circle{stroke:var(--cobalt);stroke-width:3.5}
+  #map .col{fill:var(--tagfill);stroke:none}
   #map .n circle{stroke:var(--ink);stroke-width:1.5;fill:var(--card)}
   #map .n.met circle{fill:var(--mint)}#map .n.mixed circle{fill:var(--mustard)}#map .n.missed circle{fill:var(--tomato)}#map .n.near circle{stroke-dasharray:3 2}#map .n.next circle{stroke:var(--tomato);stroke-width:3}
-  #map .n.sel circle{stroke-width:3.5;filter:drop-shadow(2px 2px 0 var(--ink))}
+  #map .n.sel circle{stroke-width:4;filter:drop-shadow(2px 2px 0 var(--ink))}
   #map .n text{font-family:var(--mono);font-weight:700;fill:var(--ink);pointer-events:none}
   #map .e{fill:none;stroke:var(--ink);stroke-width:1;opacity:.25}#map .e.hot{opacity:.9;stroke-width:2.2}
   #map .gl{font-family:var(--mono);font-weight:800;font-size:11px;letter-spacing:.1em;fill:var(--muted)}
@@ -287,10 +295,16 @@
   <div class="finstats" id="pStats"></div>
   <p class="pnote" id="pTrack"></p>
   <div class="stage" aria-label="The map">
-    <svg id="map" role="img" aria-label="The knowledge map: standards as circles by grade, links from the Learning Commons progression, colored by how the kid did. Tap one to read about it."></svg>
-    <p class="figcap">Fig. 02 · The map · New York Next Generation standards · tap one</p>
+    <div class="mapwrap" id="mapwrap">
+      <svg id="map" role="img" aria-label="The knowledge map: standards as circles by grade, links from the Learning Commons progression, colored by how the kid did. Drag to move, pinch to zoom, tap one to read about it."><g id="mapRoot"></g></svg>
+      <div class="mapbtns">
+        <button class="act" type="button" onclick="zoomBy(1.35)" aria-label="Zoom in">+</button>
+        <button class="act" type="button" onclick="zoomBy(1 / 1.35)" aria-label="Zoom out">−</button>
+      </div>
+    </div>
+    <p class="figcap">Fig. 02 · The map · New York Next Generation standards · drag, pinch, tap</p>
     <p class="legend"><i class="met"></i>got it <i class="mixed"></i>some <i class="missed"></i>not yet <i class="near"></i>not tried</p>
-    <div class="tools" style="margin-top:8px"><button class="act" type="button" id="bScope" onclick="toggleScope()" aria-pressed="false">Whole map</button></div>
+    <div class="tools" style="margin-top:8px"><button class="act" type="button" id="bFitMine" onclick="fitMine()">My climb</button><button class="act" type="button" id="bFitAll" onclick="fitAll()">Whole map</button></div>
   </div>
   <div class="result explain" id="explain"><p class="status">Tap a circle on the map to read what it means and how it went.</p></div>
   <div class="sec"><span class="k">Sprout's notes</span><span class="k" id="pNoteK"></span></div>
@@ -733,13 +747,13 @@ function registerMoves(){
 }
 
 /* ---------- parent view: every kid's climb, and the map to traverse ---------- */
-const PV = { kids: [], kid: null, placement: {}, sessions: {}, sel: null, whole: false, subs: [] };
+const PV = { kids: [], kid: null, placement: {}, sessions: {}, sel: null, subs: [], vt: { x: 0, y: 0, k: 1 }, pos: {}, W: 560, H: 380, fitted: null };
 function parentBoot(roster){
   document.documentElement.dataset.view = 'parent';
   PV.kids = (roster.kids || []).filter(k => k && k.id && k.name);
   $('tabs').innerHTML = PV.kids.map(k => `<button class="act" type="button" data-kid="${esc(k.id)}" aria-pressed="false">${esc(k.name)}</button>`).join('');
   $('tabs').addEventListener('click', e => { const b = e.target.closest('[data-kid]'); if (b) selectKid(b.dataset.kid); });
-  $('map').addEventListener('click', e => { const g = e.target.closest('.n'); if (g) selectNode(g.dataset.code); });
+  wireMap();
   $('explain').addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (b) selectNode(b.dataset.go); });
   for (const k of PV.kids){
     try { PV.subs.push(db.doc(`data/users/${k.id}/placement`).onSnapshot(s => { PV.placement[k.id] = s.exists ? s.data() : null; if (PV.kid === k.id) renderParent(); }, () => {})); } catch {}
@@ -747,8 +761,7 @@ function parentBoot(roster){
   }
   if (PV.kids.length) selectKid(PV.kids[0].id); else $('pStatus').textContent = 'No kids on the roster yet.';
 }
-function selectKid(id){ PV.kid = id; PV.sel = null; document.querySelectorAll('#tabs .act').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.kid === id))); renderParent(); }
-function toggleScope(){ PV.whole = !PV.whole; $('bScope').setAttribute('aria-pressed', String(PV.whole)); $('bScope').textContent = PV.whole ? 'Just the climb' : 'Whole map'; renderParent(); }
+function selectKid(id){ PV.kid = id; PV.sel = null; PV.fitted = null; document.querySelectorAll('#tabs .act').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.kid === id))); renderParent(); }
 function kidStats(id){
   const sess = (PV.sessions[id] || []).slice().sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
   const st = {}; const answers = {}; let right = 0, of = 0;
@@ -782,24 +795,47 @@ const placeGrade = level => level <= 1 ? 0 : level - 1;
 function drawMap(states, place, extra){
   const nodes = Object.assign({}, GRAPH.nodes), edges = GRAPH.edges.slice();
   if (extra && extra.nodes) for (const c in extra.nodes){ const n = extra.nodes[c]; if (n && Number.isInteger(n.g) && typeof n.n === 'string' && !nodes[c]) nodes[c] = { g: Math.max(0, Math.min(8, n.g)), n: n.n.slice(0, 60), d: typeof n.d === 'string' ? n.d.slice(0, 420) : '', lc: Array.isArray(n.lc) ? n.lc.slice(0, 8).map(String) : [], ny: n.ny && typeof n.ny.c === 'string' ? { c: n.ny.c.slice(0, 20), d: typeof n.ny.d === 'string' ? n.ny.d.slice(0, 420) : '' } : null }; }
-  if (extra && Array.isArray(extra.edges)) for (const e of extra.edges) if (Array.isArray(e) && nodes[e[0]] && nodes[e[1]]) edges.push([e[0], e[1]]);
-  PV.nodes = nodes; PV.edges = edges;
-  let keep;
-  if (PV.whole) keep = new Set(Object.keys(nodes));
-  else { keep = new Set(Object.keys(states).filter(c => nodes[c])); if (PV.sel && nodes[PV.sel]) keep.add(PV.sel); const near = new Set(); for (const [a, b] of edges){ if (keep.has(a) && !keep.has(b)) near.add(b); if (keep.has(b) && !keep.has(a)) near.add(a); } for (const c of [...near].filter(x => nodes[x].l || x === PV.sel)) keep.add(c); if (!keep.size) for (const L of LEVELS) for (const c of L.stds) keep.add(c); }
-  const cols = [...new Set([...keep].map(c => nodes[c].g))].sort((a, b) => a - b);
-  const byCol = cols.map(g => [...keep].filter(c => nodes[c].g === g).sort());
-  const W = 560, colW = W / Math.max(1, cols.length), rowH = PV.whole ? 30 : 60, maxRows = Math.max(...byCol.map(c => c.length)), H = 30 + maxRows * rowH + 20;
-  const pos = {}; byCol.forEach((list, ci) => { const top = 30 + (maxRows - list.length) * rowH / 2; list.forEach((c, ri) => { pos[c] = [colW * ci + colW / 2, top + ri * rowH + rowH / 2]; }); });
-  const svg = $('map'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = '';
-  cols.forEach((g, ci) => { if (place != null && g === placeGrade(place)) svg.append(rect(colW * ci + 2, 2, colW - 4, H - 4, C.tag, { stroke: 'none' })); svg.append(txt(g === 0 ? 'K' : g >= 3 && g <= 8 ? 'GR ' + g + ' TEST' : 'GR ' + g, colW * ci + colW / 2, 12, 11, { class: 'gl' })); });
-  for (const [a, b] of edges){ if (!pos[a] || !pos[b]) continue; const [x1, y1] = pos[a], [x2, y2] = pos[b]; const pth = document.createElementNS(NS, 'path'); const mx = (x1 + x2) / 2; pth.setAttribute('d', `M${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`); pth.setAttribute('class', 'e' + ((PV.sel && (a === PV.sel || b === PV.sel)) || (states[a] && states[b]) ? ' hot' : '')); svg.append(pth); }
-  for (const c of keep){ const [x, y] = pos[c], st = states[c], r = PV.whole ? 7 : 12; const g = document.createElementNS(NS, 'g'); g.setAttribute('class', 'n' + (st ? ' ' + st : ' near') + (c === PV.sel ? ' sel' : '')); g.dataset.code = c; g.append(circ(x, y, r, C.card)); const tt = document.createElementNS(NS, 'title'); tt.textContent = c + ': ' + (STD_NAME[c] || nodes[c].n); g.append(tt);
-    if (!PV.whole || st || c === PV.sel){ const nm = STD_NAME[c] || nodes[c].n; const lim = PV.whole ? 16 : Math.max(12, Math.floor(colW / 5.4)); const w1 = nm.length > lim ? nm.slice(0, lim).replace(/\s+\S*$/, '') : nm; const w2 = nm.length > lim ? nm.slice(w1.length).trim() : ''; g.append(txt(w1.length > lim ? w1.slice(0, lim - 1) + '…' : w1, x, y + r + 9, PV.whole ? 8 : 9)); if (w2 && !PV.whole) g.append(txt(w2.length > lim ? w2.slice(0, lim - 1) + '…' : w2, x, y + r + 19, 9)); g.append(txt(nodes[c].ny && nodes[c].ny.c ? nodes[c].ny.c : c, x, y - r - 7, 8, { fill: C.muted })); }
-    svg.append(g); }
-  if (place != null){ const ci = cols.indexOf(placeGrade(place)); if (ci >= 0){ const x = colW * ci + colW / 2; const f = document.createElementNS(NS, 'path'); f.setAttribute('d', `M${x - 22} ${H - 2} l0 -18 l30 7 l-30 7`); f.setAttribute('fill', C.tomato); f.setAttribute('stroke', INK); svg.append(f); svg.append(txt('YOU', x - 7, H - 13, 8, { fill: C.paper, 'font-weight': 900 })); } }
+  if (extra && Array.isArray(extra.edges)) for (const e of extra.edges) if (Array.isArray(e) && nodes[e[0]] && nodes[e[1]] && !edges.some(x => x[0] === e[0] && x[1] === e[1])) edges.push([e[0], e[1]]);
+  PV.nodes = nodes; PV.edges = edges; PV.states = states; PV.place = place;
+  // layout: one column per grade, the whole graph, generous rows; positions are kept so the view can glide between renders
+  const cols = [...new Set(Object.keys(nodes).map(c => nodes[c].g))].sort((a, b) => a - b);
+  const byCol = cols.map(g => Object.keys(nodes).filter(c => nodes[c].g === g).sort((a, b) => (states[b] ? 1 : 0) - (states[a] ? 1 : 0) || a.localeCompare(b)));
+  const colW = 200, rowH = 72, maxRows = Math.max(...byCol.map(c => c.length)), W = cols.length * colW, H = 40 + maxRows * rowH + 30;
+  const pos = {}; byCol.forEach((list, ci) => { const top = 40 + (maxRows - list.length) * rowH / 2; list.forEach((c, ri) => { pos[c] = [colW * ci + colW / 2, top + ri * rowH + rowH / 2]; }); });
+  PV.pos = pos; PV.cols = cols; PV.colW = colW; PV.mapW = W; PV.mapH = H;
+  const root = $('mapRoot'); root.innerHTML = '';
+  cols.forEach((g, ci) => { if (place != null && g === placeGrade(place)) root.append(rect(colW * ci + 4, 4, colW - 8, H - 8, C.tag, { class: 'col' })); root.append(txt(g === 0 ? 'K' : g >= 3 && g <= 8 ? 'GR ' + g + ' TEST' : 'GR ' + g, colW * ci + colW / 2, 18, 12, { class: 'gl' })); });
+  const selN = PV.sel ? new Set(edges.filter(e => e[0] === PV.sel || e[1] === PV.sel).flatMap(e => e)) : new Set();
+  for (const [a, b] of edges){ const [x1, y1] = pos[a], [x2, y2] = pos[b]; const pth = document.createElementNS(NS, 'path'); const mx = (x1 + x2) / 2; pth.setAttribute('d', `M${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`); pth.setAttribute('class', 'e' + ((PV.sel && (a === PV.sel || b === PV.sel)) || (states[a] && states[b]) ? ' hot' : '')); root.append(pth); }
+  for (const c in nodes){ const [x, y] = pos[c], st = states[c], r = 13; const g = document.createElementNS(NS, 'g'); g.setAttribute('class', 'n' + (st ? ' ' + st : ' near') + (c === PV.sel ? ' sel' : selN.has(c) ? ' nb' : '')); g.dataset.code = c; g.append(circ(x, y, r, C.card)); const tt = document.createElementNS(NS, 'title'); tt.textContent = c + ': ' + (STD_NAME[c] || nodes[c].n); g.append(tt);
+    const lab = document.createElementNS(NS, 'g'); lab.setAttribute('class', 'lab'); const nm = STD_NAME[c] || nodes[c].n; const lim = 26; lab.append(txt(nm.length > lim ? nm.slice(0, lim - 1).replace(/\s+\S*$/, '') + '…' : nm, x, y + r + 11, 9.5)); lab.append(txt(nodes[c].ny && nodes[c].ny.c ? nodes[c].ny.c : c, x, y - r - 7, 8, { fill: C.muted })); g.append(lab); root.append(g); }
+  if (place != null){ const ci = cols.indexOf(placeGrade(place)); if (ci >= 0){ const x = colW * ci + colW / 2; const f = document.createElementNS(NS, 'path'); f.setAttribute('d', `M${x - 22} ${H - 6} l0 -18 l30 7 l-30 7`); f.setAttribute('fill', C.tomato); f.setAttribute('stroke', INK); root.append(f); root.append(txt('YOU', x - 7, H - 17, 8, { fill: C.paper, 'font-weight': 900 })); } }
+  if (!PV.fitted){ fitMine(true); }
+  else applyView();
 }
-function selectNode(code){ PV.sel = code === PV.sel ? null : code; renderParent(); if (PV.sel) $('explain').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+// --- the viewport: pan, pinch, wheel, buttons; the svg's viewBox is fixed and the root group carries the transform
+function wireMap(){
+  const svg = $('map'), wrap = $('mapwrap');
+  svg.setAttribute('viewBox', `0 0 ${PV.W} ${PV.H}`);
+  const pts = new Map(); let drag = null, pinch = null, moved = 0;
+  const local = e => { const b = svg.getBoundingClientRect(); return [(e.clientX - b.left) * PV.W / b.width, (e.clientY - b.top) * PV.H / b.height]; };
+  svg.addEventListener('pointerdown', e => { svg.setPointerCapture(e.pointerId); pts.set(e.pointerId, local(e)); moved = 0; if (pts.size === 1) drag = { x: PV.vt.x, y: PV.vt.y, from: local(e), target: e.target.closest('.n') }; else if (pts.size === 2){ const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), k: PV.vt.k, cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2, x: PV.vt.x, y: PV.vt.y }; drag = null; } svg.classList.add('drag'); });
+  svg.addEventListener('pointermove', e => { if (!pts.has(e.pointerId)) return; pts.set(e.pointerId, local(e)); if (pinch && pts.size >= 2){ const [a, b] = [...pts.values()]; const d = Math.hypot(a[0] - b[0], a[1] - b[1]); const k = clampK(pinch.k * d / Math.max(1, pinch.d)); const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2; PV.vt.k = k; PV.vt.x = cx - (pinch.cx - pinch.x) * k / pinch.k; PV.vt.y = cy - (pinch.cy - pinch.y) * k / pinch.k; moved += 10; applyView(); } else if (drag){ const p = local(e); const dx = p[0] - drag.from[0], dy = p[1] - drag.from[1]; moved += Math.abs(dx) + Math.abs(dy); PV.vt.x = drag.x + dx; PV.vt.y = drag.y + dy; applyView(); } });
+  const up = e => { const wasTap = drag && moved < 8 && drag.target; pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (pts.size === 0){ svg.classList.remove('drag'); if (wasTap) selectNode(drag.target.dataset.code); drag = null; } else if (pts.size === 1){ const [p] = [...pts.values()]; drag = { x: PV.vt.x, y: PV.vt.y, from: p, target: null }; moved = 20; } };
+  svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up);
+  wrap.addEventListener('wheel', e => { e.preventDefault(); const [cx, cy] = local(e); zoomAt(cx, cy, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+}
+const clampK = k => Math.max(0.25, Math.min(3, k));
+function applyView(){ const { x, y, k } = PV.vt; $('mapRoot').setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)}) scale(${k.toFixed(3)})`); $('map').classList.toggle('far', k < 0.6); }
+function zoomAt(cx, cy, f){ const k = clampK(PV.vt.k * f); const r = k / PV.vt.k; PV.vt.x = cx - (cx - PV.vt.x) * r; PV.vt.y = cy - (cy - PV.vt.y) * r; PV.vt.k = k; applyView(); }
+function zoomBy(f){ zoomAt(PV.W / 2, PV.H / 2, f); }
+function fitBox(x0, y0, x1, y1, pad, animate){ const k = clampK(Math.min((PV.W - 2 * pad) / Math.max(60, x1 - x0), (PV.H - 2 * pad) / Math.max(60, y1 - y0))); const to = { k, x: (PV.W - (x0 + x1) * k) / 2, y: (PV.H - (y0 + y1) * k) / 2 }; animate ? glideTo(to) : (Object.assign(PV.vt, to), applyView()); }
+function fitAll(){ PV.fitted = 'all'; fitBox(0, 0, PV.mapW, PV.mapH, 8, true); }
+function fitMine(instant){ PV.fitted = 'mine'; const codes = Object.keys(PV.states || {}).filter(c => PV.pos[c]); const near = new Set(codes); for (const [a, b] of PV.edges){ if (near.has(a) && PV.nodes[b] && PV.nodes[b].l) near.add(b); if (near.has(b) && PV.nodes[a] && PV.nodes[a].l) near.add(a); } const list = [...near].length ? [...near] : LEVELS.flatMap(L => L.stds).filter(c => PV.pos[c]); const xs = list.map(c => PV.pos[c][0]), ys = list.map(c => PV.pos[c][1]); fitBox(Math.min(...xs) - 70, Math.min(...ys) - 30, Math.max(...xs) + 70, Math.max(...ys) + 36, 10, !instant); }
+let glideT = 0;
+function glideTo(to){ cancelAnimationFrame(glideT); const from = Object.assign({}, PV.vt), t0 = performance.now(); const step = now => { const u = Math.min(1, (now - t0) / 320), e = 1 - Math.pow(1 - u, 3); PV.vt.x = from.x + (to.x - from.x) * e; PV.vt.y = from.y + (to.y - from.y) * e; PV.vt.k = from.k + (to.k - from.k) * e; applyView(); if (u < 1) glideT = requestAnimationFrame(step); }; glideT = requestAnimationFrame(step); }
+function focusNode(code){ const p = PV.pos[code]; if (!p) return; const k = Math.max(PV.vt.k, 1.1); glideTo({ k, x: PV.W / 2 - p[0] * k, y: PV.H / 2 - p[1] * k }); }
+function selectNode(code){ PV.sel = code === PV.sel ? null : code; PV.fitted = PV.fitted || 'mine'; renderParent(); if (PV.sel){ focusNode(PV.sel); $('explain').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } }
 function renderExplain(d){
   const c = PV.sel, box = $('explain');
   if (!c || !PV.nodes[c]){ box.innerHTML = '<p class="status">Tap a circle on the map to read what it means and how it went.</p>'; return; }
