@@ -1,0 +1,701 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="sprout-completion-mode" content="manual">
+<meta name="sprout-web-sites" content="https://read-along-eight.vercel.app">
+<title>Math Climb</title>
+<!--
+  Math Climb. One canvas, two views on one store.
+  Kid view: rounds of five questions, read aloud; four or five right climbs a rung (Pre-K to Grade 5), two or
+  fewer drops one, three stays once. A wrong pick names its trap (a Learning Commons misconception), "Show me"
+  draws the working while the canvas voice explains. Between rounds the canvas pings a hop that wakes the coach
+  routine; the routine reads the session from the db, walks the Learning Commons progression map and may write
+  the next round (`coach/next`) plus a report on `placement`.
+  Parent view (anyone not on `family/roster`): each kid's rung, climbs, accuracy, and the knowledge map to
+  traverse: tap a standard for what it means, its smaller skills, the kid's answers on it, and the standards
+  before and after it, each tappable. Standard texts and skills are baked in from Learning Commons.
+  Data: data/users/<kid>/profile {level}, data/users/<kid>/climb/sessions/<sid>, .../coach/next,
+  data/users/<kid>/placement, family/roster {kids:[{id,name}]} (admin only).
+-->
+<style>
+/*__READALONG_CSS__*/
+  /* climb */
+  .page{padding-bottom:120px}
+  #fig.think #sun{animation:glow 1.4s ease-in-out infinite}
+  .rungs{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .q{display:flex;flex-direction:column;gap:10px}
+  .q b{font:600 24px/1.25 var(--read);text-wrap:balance}
+  .q b.eq{font:800 40px/1.1 var(--mono);text-align:center;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+  .pic{background:var(--paper);border:1.5px dashed var(--rule);border-radius:10px;padding:8px}
+  .pic svg{width:100%;height:auto;display:block;overflow:visible}
+  .d{transition:opacity .25s,transform .25s}.d.dim{opacity:.18}.d.lit{transform:scale(1.18)}
+  .choices{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  .choices.frozen{opacity:.45;pointer-events:none}
+  .ch{font:800 28px var(--mono);color:var(--ink);background:var(--card);border:2px solid var(--ink);border-radius:14px;padding:16px 10px;min-height:72px;box-shadow:3px 3px 0 var(--ink);white-space:normal;line-height:1.15;font-variant-numeric:tabular-nums}
+  .ch.txt{font-size:17px;font-weight:700}
+  .ch:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  .ch.ok{background:var(--mint)}.ch.bad{background:var(--tomato);color:var(--paper)}.ch.mute{opacity:.35}
+  .ch:disabled{transform:none}
+  .dots{display:flex;gap:6px}
+  .dots i{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--ink);background:var(--paper);display:block}
+  .dots i.ok{background:var(--mint)}.dots i.bad{background:var(--tomato)}.dots i.now{background:var(--mustard)}
+  .fb{margin-top:12px}
+  .why{font-family:var(--read);font-size:17px;line-height:1.5;background:var(--card);border:1.5px solid var(--ink);border-radius:12px;padding:10px 12px;margin:10px 0 0}
+  .stat{background:var(--card);border:1.5px solid var(--ink);border-radius:10px;padding:8px 10px;text-align:left}
+  .stat .v{font-size:26px}
+  .stats .stat{background:none;border:0;padding:0;text-align:right}
+  .skills{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+  .skills .k-pill{margin:0;line-height:2;padding:0 10px}
+  .k-pill[data-kind=can]{background:var(--mint)}.k-pill[data-kind=next]{background:var(--mustard)}.k-pill[data-kind=trap]{background:var(--blush)}.k-pill[data-kind=grade]{background:var(--cobalt);color:var(--paper)}
+  .speaker{display:flex;gap:8px;align-items:center;cursor:pointer;background:none;border:0;padding:0;text-align:left;white-space:normal;min-height:0;width:100%}
+  .speaker.on .k-pill{background:var(--mustard)}
+  /* parent view */
+  html[data-view=parent] #kid{display:none!important}
+  html[data-view=kid] #parent{display:none!important}
+  html:not([data-view]) #parent,html:not([data-view]) #kid{display:none!important}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px}
+  .tabs .act[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+  #map{width:100%;height:auto;display:block;overflow:visible}
+  #map .n{cursor:pointer}
+  #map .n circle{stroke:var(--ink);stroke-width:1.5;fill:var(--card)}
+  #map .n.met circle{fill:var(--mint)}#map .n.mixed circle{fill:var(--mustard)}#map .n.missed circle{fill:var(--tomato)}#map .n.near circle{stroke-dasharray:3 2}#map .n.next circle{stroke:var(--tomato);stroke-width:3}
+  #map .n.sel circle{stroke-width:3.5;filter:drop-shadow(2px 2px 0 var(--ink))}
+  #map .n text{font-family:var(--mono);font-weight:700;fill:var(--ink);pointer-events:none}
+  #map .e{fill:none;stroke:var(--ink);stroke-width:1;opacity:.25}#map .e.hot{opacity:.9;stroke-width:2.2}
+  #map .gl{font-family:var(--mono);font-weight:800;font-size:11px;letter-spacing:.1em;fill:var(--muted)}
+  .explain{margin-top:12px}
+  .explain p{font-family:var(--read);font-size:16px;line-height:1.5;margin:0}
+  .lcs{margin:8px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+  .lcs li{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.4}
+  .lcs li i{flex:none;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--ink);background:var(--paper);display:grid;place-items:center;font-size:10px;font-style:normal;font-weight:800}
+  .lcs li i.met{background:var(--mint)}.lcs li i.missed{background:var(--tomato)}.lcs li i.mixed{background:var(--mustard)}
+  .hops{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .hops .act{padding:6px 11px;min-height:36px;font-size:12px;white-space:normal;text-align:left;line-height:1.3}
+  .hops .act.before{background:var(--tagfill)}.hops .act.after{background:var(--mint)}
+  .answers{margin:8px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+  .answers li{display:flex;gap:8px;align-items:baseline;font-size:13px}
+  .answers li .k-pill{flex:none}
+  .climbs{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+  .climbs .cont{cursor:default}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px;align-items:center}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:50%;border:1.5px solid var(--ink);vertical-align:-1px;margin-right:3px}
+  .legend .met{background:var(--mint)}.legend .mixed{background:var(--mustard)}.legend .missed{background:var(--tomato)}.legend .near{border-style:dashed}
+  @media (prefers-reduced-motion:reduce){.d{transition:none}}
+</style></head><body>
+<div class="page" id="page">
+
+<!-- ===================== kid view ===================== -->
+<div id="kid">
+  <section id="home" data-screen="home">
+    <header class="top"><h1>Math Climb</h1><span>Climb the rungs. Sprout helps when you slip.</span></header>
+    <div class="stage" aria-label="The climb">
+      <div class="stats" id="homeStats"></div>
+      <svg id="fig" role="img" aria-label="An inked hill with seven stone rungs from Pre-K to Grade 5, a flag on the rung you are on, and a sun that lights while Sprout thinks"></svg>
+      <p class="figcap">Fig. 01 · The climb</p>
+    </div>
+    <div class="find">
+      <button class="cont" id="cont" type="button" onclick="startClimb()" hidden></button>
+      <h2 id="homeH">Ready to climb?</h2>
+      <p class="status">Five questions a round. Get most of them and we climb higher.</p>
+      <button class="big" type="button" id="bStart" onclick="startClimb()"><span class="dot" aria-hidden="true"></span><span>Start climbing</span></button>
+      <p class="status" id="homeStatus"></p>
+    </div>
+    <div class="sec"><span class="k">The rungs</span><span class="k" id="rungK"></span></div>
+    <div class="rungs" id="rungs"></div>
+  </section>
+
+  <section id="play" data-screen="play" hidden>
+    <div class="head">
+      <div class="bar-top">
+        <button type="button" id="bHome" onclick="goHome()" aria-label="Back to the climb">Home</button>
+        <span class="ttl" id="pTitle"></span>
+        <div class="dots" id="dots"></div>
+      </div>
+      <div class="dock">
+        <button class="speaker" id="live" type="button" onclick="replay()" aria-label="Hear it again">
+          <span class="k-pill" id="liveKind" data-kind="reply">Sprout</span><span class="txt" id="liveText"></span>
+        </button>
+      </div>
+    </div>
+    <div class="result q" id="qCard" style="margin-top:14px">
+      <b id="qText"></b>
+      <div class="pic" id="pic" hidden></div>
+    </div>
+    <div class="choices" id="choices"></div>
+    <div class="fb" id="fb" hidden>
+      <div class="why" id="why" hidden></div>
+      <div class="tools" style="margin-top:10px">
+        <button class="act" type="button" id="bShow" onclick="showMe()">Show me</button>
+        <button class="act primary" type="button" id="bNext" onclick="next()" style="flex:1">Next</button>
+      </div>
+    </div>
+    <div class="tools" id="helpRow" style="margin-top:12px"><button class="act" type="button" id="bHint" onclick="hint()">Give me a hint</button></div>
+  </section>
+
+  <div class="sheet" id="roundSheet" hidden>
+    <div class="sheet-card" role="dialog" aria-label="Round finished">
+      <div class="sheet-head"><h3 id="rsTitle">Round done</h3><span class="k" id="rsK"></span></div>
+      <div class="finstats" id="rsStats"></div>
+      <p class="pnote" id="rsNote"></p>
+      <div class="row"><button type="button" class="act primary" id="bRoundGo" onclick="afterRound()">Keep going</button></div>
+    </div>
+  </div>
+
+  <div class="sheet" id="finSheet" hidden>
+    <div class="sheet-card" role="dialog" aria-label="Climb finished">
+      <div class="sheet-head"><h3 id="finTitle">Your rung</h3><span class="k">The climb</span></div>
+      <div class="finstats" id="finStats"></div>
+      <p class="pnote" id="finNote"></p>
+      <div class="k" style="margin-bottom:6px">You can</div>
+      <div class="skills" id="finCan"></div>
+      <div class="k" style="margin-bottom:6px">Next up</div>
+      <div class="skills" id="finNext"></div>
+      <div class="row"><button type="button" class="act primary" id="bDone" onclick="finishTap()">Done</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== parent view ===================== -->
+<div id="parent">
+  <header class="top"><h1>Math Climb</h1><span>For grown-ups · how the climb is going</span></header>
+  <div class="tabs" id="tabs"></div>
+  <div class="finstats" id="pStats"></div>
+  <div class="stage" aria-label="The map">
+    <svg id="map" role="img" aria-label="The knowledge map: standards as circles by grade, links from the Learning Commons progression, colored by how the kid did. Tap one to read about it."></svg>
+    <p class="figcap">Fig. 02 · The map · tap a standard</p>
+    <p class="legend"><i class="met"></i>got it <i class="mixed"></i>some <i class="missed"></i>not yet <i class="near"></i>not tried</p>
+    <div class="tools" style="margin-top:8px"><button class="act" type="button" id="bScope" onclick="toggleScope()" aria-pressed="false">Whole map</button></div>
+  </div>
+  <div class="result explain" id="explain"><p class="status">Tap a circle on the map to read what it means and how it went.</p></div>
+  <div class="sec"><span class="k">Sprout's notes</span><span class="k" id="pNoteK"></span></div>
+  <p class="pnote" id="pNote">No report yet. The coach writes one after a climb.</p>
+  <div class="sec"><span class="k">Climbs</span><span class="k" id="pClimbK"></span></div>
+  <div class="climbs" id="climbs"></div>
+  <p class="status" id="pStatus"></p>
+</div>
+
+</div>
+
+<script>
+'use strict';
+/* ---------- host ---------- */
+const $ = id => document.getElementById(id);
+const hasSprout = typeof sprout === 'object' && sprout !== null;
+const CFG = { wake: 'https://read-along-eight.vercel.app/api/climb', key: '__CLIMB_KEY__' };
+const MAX_ROUNDS = 6, PER_ROUND = 5;
+const INK = '#231e16';
+const LEVELS = [
+  { id: 'PK', label: 'Pre-K', say: 'pre K', stds: ['K.CC.B.5', 'K.CC.C.6', 'K.CC.A.3'] },
+  { id: 'K', label: 'K', say: 'kindergarten', stds: ['K.CC.B.5', 'K.CC.C.6', 'K.OA.A.2', 'K.OA.A.5'] },
+  { id: 'G1', label: 'Gr 1', say: 'grade one', stds: ['1.OA.C.6', '1.NBT.B.2', '1.OA.A.1'] },
+  { id: 'G2', label: 'Gr 2', say: 'grade two', stds: ['2.NBT.B.5', '2.OA.A.1', '2.MD.C.8'] },
+  { id: 'G3', label: 'Gr 3', say: 'grade three', stds: ['3.OA.C.7', '3.NF.A.1', '3.OA.A.3'] },
+  { id: 'G4', label: 'Gr 4', say: 'grade four', stds: ['4.NBT.B.5', '4.NF.A.2', '4.OA.A.3'] },
+  { id: 'G5', label: 'Gr 5', say: 'grade five', stds: ['5.NF.A.1', '5.NBT.B.7'] }
+];
+const STD_NAME = {
+  'K.CC.A.3': 'reading numerals', 'K.CC.B.5': 'counting how many', 'K.CC.C.6': 'more, fewer, same',
+  'K.OA.A.2': 'adding and taking away within 10', 'K.OA.A.5': 'adding and taking away within 5',
+  '1.OA.C.6': 'adding and subtracting within 20', '1.NBT.B.2': 'tens and ones', '1.OA.A.1': 'number stories within 20',
+  '2.NBT.B.5': 'adding and subtracting within 100', '2.OA.A.1': 'two-step number stories', '2.MD.C.8': 'counting money',
+  '3.OA.C.7': 'times tables and dividing', '3.NF.A.1': 'what a fraction is', '3.OA.A.3': 'equal-groups stories',
+  '4.NBT.B.5': 'multiplying bigger numbers', '4.NF.A.2': 'comparing fractions', '4.OA.A.3': 'multi-step stories',
+  '5.NF.A.1': 'adding fractions with different bottoms', '5.NBT.B.7': 'decimals'
+};
+// The Learning Commons coherence map, one hop around the ladder standards: code → {g grade, n short name, d standard text, lc smaller skills, u uuid}.
+/*__GRAPH__*/
+
+/* ---------- state ---------- */
+let db = null, self = null, voiceOn = true, unsubCoach = null, coach = null, busy = false, lastPlacement = null, frozenT = 0;
+const S = hasSprout && sprout.state ? sprout.state : {};
+S.sid ??= null; S.level ??= 0; S.rounds ??= []; S.cur ??= null; S.coachUsed ??= 0; S.done ??= false; S.placement ??= null; S.startLevel ??= null; S.lastCoachRound ??= -1;
+const nowIso = () => new Date().toISOString();
+const newId = () => 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+/* ---------- helpers ---------- */
+const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const pick = a => a[Math.floor(Math.random() * a.length)];
+function shuffle(a){ for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function esc(s){ return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\u0022/g, '&quot;'); }
+const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+const THINGS = [['apple', 'apples', '🍎'], ['duck', 'ducks', '🐥'], ['star', 'stars', '⭐'], ['cookie', 'cookies', '🍪'], ['fish', 'fish', '🐟'], ['balloon', 'balloons', '🎈'], ['frog', 'frogs', '🐸'], ['flower', 'flowers', '🌼']];
+const NAMES = ['Mia', 'Sam', 'Ava', 'Leo', 'Zoe', 'Max', 'Nia', 'Eli'];
+const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+const sayN = n => n <= 20 ? WORDS[n] : String(n);
+function gcd(a, b){ return b ? gcd(b, a % b) : a; }
+const fracStr = (a, b) => a + '/' + b;
+function fracSay(a, b){ const d = { 2: 'half', 3: 'third', 4: 'fourth', 5: 'fifth', 6: 'sixth', 8: 'eighth', 10: 'tenth', 12: 'twelfth' }[b] || (b + 'th'); return sayN(a) + ' ' + d + (a === 1 ? '' : 's'); }
+// choices: [{v, tag}] with the right one first. Returns the item with `ans` = right value and choices shuffled.
+function mk(o){
+  const seen = new Set(); const ch = [];
+  for (const c of o.choices){ const v = String(c.v); if (seen.has(v)) continue; seen.add(v); ch.push({ v, tag: c.tag || null }); if (ch.length === (o.max || 4)) break; }
+  return Object.assign({}, o, { text: cap(o.text), why: cap(o.why), fact: cap(o.fact || ''), ans: String(o.choices[0].v), choices: shuffle(ch) });
+}
+const near = (n, lo, hi) => { const out = []; for (const d of [-1, 1, -2, 2, 3]) { const v = n + d; if (v >= lo && v <= hi) out.push(v); } return out; };
+
+/* ---------- item generators (one per Learning Commons standard on the ladder) ---------- */
+const GEN = {
+  'PK:K.CC.B.5'(){ const n = rnd(1, 5), t = pick(THINGS); return mk({ std: 'K.CC.B.5', lc: 'count to answer how many, up to 5 in a line', text: `How many ${t[1]}?`, say: `How many ${t[1]} are there?`, pic: { kind: 'dots', n, emoji: t[2], arr: 'line' }, choices: [{ v: n }, ...near(n, 1, 6).map(v => ({ v, tag: 'off-by-one' }))], max: 3, fact: `${sayN(n)} ${n === 1 ? t[0] : t[1]}.`, why: `Let us count them together: ${WORDS.slice(1, n + 1).join(', ')}. ${sayN(n)} ${t[1]}!`, count: n, hint: 'Touch each one and count out loud.' }); },
+  'PK:K.CC.C.6'(){ let a = rnd(1, 5), b = rnd(1, 5); while (b === a) b = rnd(1, 5); const ta = pick(THINGS); let tb = pick(THINGS); while (tb === ta) tb = pick(THINGS); const more = a > b ? ta : tb, less = a > b ? tb : ta; return mk({ std: 'K.CC.C.6', lc: 'identify which group has more, up to 5', text: `Which has more?`, say: `Which has more, the ${ta[1]} or the ${tb[1]}?`, pic: { kind: 'compare', a, b, ea: ta[2], eb: tb[2] }, choices: [{ v: more[2] + ' ' + more[1] }, { v: less[2] + ' ' + less[1], tag: 'reversed' }], max: 2, fact: `${sayN(Math.max(a, b))} ${more[1]} is more than ${sayN(Math.min(a, b))} ${less[1]}.`, why: `There are ${sayN(a)} ${ta[1]} and ${sayN(b)} ${tb[1]}. ${sayN(Math.max(a, b))} is more than ${sayN(Math.min(a, b))}, so the ${more[1]} have more.`, hint: 'Count each pile. The bigger number has more.' }); },
+  'PK:K.CC.A.3'(){ const n = rnd(1, 5); const others = shuffle([1, 2, 3, 4, 5].filter(x => x !== n)).slice(0, 2); return mk({ std: 'K.CC.A.3', lc: 'recognise written numerals 0 to 5', text: `Tap the number ${sayN(n)}`, say: `Tap the number ${sayN(n)}.`, pic: null, choices: [{ v: n }, ...others.map(v => ({ v, tag: 'numeral' }))], max: 3, fact: `This is ${sayN(n)}.`, why: `This is how we write ${sayN(n)}. It means this many dots.`, showDots: n, hint: `Which one looks like ${sayN(n)}?` }); },
+  'K.CC.B.5'(){ const n = rnd(6, 12), t = pick(THINGS), arr = pick(['array', 'circle', 'line']); return mk({ std: 'K.CC.B.5', lc: `count to answer how many, up to 20 in ${arr === 'array' ? 'an array' : arr === 'circle' ? 'a circle' : 'a line'}`, text: `How many ${t[1]}?`, say: `How many ${t[1]} are there?`, pic: { kind: 'dots', n, emoji: t[2], arr }, choices: [{ v: n }, ...near(n, 1, 20).map(v => ({ v, tag: 'off-by-one' }))], fact: `${sayN(n)} ${t[1]}.`, why: `Count them with me: ${WORDS.slice(1, n + 1).join(', ')}. ${sayN(n)} ${t[1]}.`, count: n, hint: 'Count in a path so you do not miss one or count one twice.' }); },
+  'K.CC.C.6'(){ let a = rnd(3, 10), b = rnd(3, 10); const same = Math.random() < .25; if (same) b = a; else while (b === a) b = rnd(3, 10); const ta = pick(THINGS); let tb = pick(THINGS); while (tb === ta) tb = pick(THINGS); const opts = [{ v: `more ${ta[1]}`, k: a > b }, { v: `more ${tb[1]}`, k: b > a }, { v: 'the same', k: a === b }]; const right = opts.find(o => o.k), wrong = opts.filter(o => !o.k); return mk({ std: 'K.CC.C.6', lc: 'greater than, less than or equal, groups up to 10', text: `More ${ta[1]}, more ${tb[1]}, or the same?`, say: `Are there more ${ta[1]}, more ${tb[1]}, or the same?`, pic: { kind: 'compare', a, b, ea: ta[2], eb: tb[2] }, choices: [{ v: right.v }, ...wrong.map(o => ({ v: o.v, tag: 'reversed' }))], txt: true, fact: same ? `${sayN(a)} and ${sayN(b)}: the same.` : `${sayN(a)} ${ta[1]}, ${sayN(b)} ${tb[1]}: ${sayN(Math.max(a, b))} is more.`, why: same ? `${sayN(a)} ${ta[1]} and ${sayN(b)} ${tb[1]}. Same number, so they are equal.` : `${sayN(a)} ${ta[1]} and ${sayN(b)} ${tb[1]}. ${sayN(Math.max(a, b))} is more.`, hint: 'Count both piles first.' }); },
+  'K.OA.A.2'(){ const t = pick(THINGS); if (Math.random() < .5){ const a = rnd(1, 6), b = rnd(1, Math.min(4, 10 - a)); return mk({ std: 'K.OA.A.2', lc: 'add within 10 with objects', text: `${a} ${a === 1 ? t[0] : t[1]} and ${b} more. How many?`, say: `${sayN(a)} ${a === 1 ? t[0] : t[1]}, and ${sayN(b)} more come. How many ${t[1]} now?`, pic: { kind: 'dots', n: a + b, groups: [a, b], emoji: t[2], arr: 'line' }, choices: [{ v: a + b }, { v: a, tag: 'part' }, { v: a + b + 1, tag: 'off-by-one' }, { v: a + b - 1, tag: 'off-by-one' }], fact: `${sayN(a)} and ${sayN(b)} more is ${sayN(a + b)}.`, why: `${sayN(a)} and ${sayN(b)} more. Count on from ${sayN(a)}: ${WORDS.slice(a + 1, a + b + 1).join(', ')}. ${sayN(a + b)}.`, count: a + b, hint: `Start at ${sayN(a)} and count on ${sayN(b)} more.` }); }
+    const a = rnd(3, 10), b = rnd(1, a - 1); return mk({ std: 'K.OA.A.2', lc: 'subtract within 10 with objects', text: `${a} ${t[1]}. ${b} go away. How many are left?`, say: `There are ${sayN(a)} ${t[1]}. ${sayN(b)} go away. How many are left?`, pic: { kind: 'dots', n: a, cross: b, emoji: t[2], arr: 'line' }, choices: [{ v: a - b }, { v: a + b, tag: 'adds' }, { v: a - b + 1, tag: 'off-by-one' }, { v: b, tag: 'part' }], fact: `${sayN(a)} take away ${sayN(b)} leaves ${sayN(a - b)}.`, why: `${sayN(a)} take away ${sayN(b)}. Cross out ${sayN(b)}, and count what is left: ${sayN(a - b)}.`, count: a - b, hint: 'Cross out the ones that go away. Count the rest.' }); },
+  'K.OA.A.5'(){ const add = Math.random() < .5; const a = rnd(1, 4), b = rnd(1, 5 - a); const x = add ? a : a + b, y = b, r = add ? a + b : a; return mk({ std: 'K.OA.A.5', lc: 'fluently add and subtract within 5', text: `${x} ${add ? '+' : '−'} ${y} = ?`, eq: true, say: `${sayN(x)} ${add ? 'plus' : 'take away'} ${sayN(y)}. What is it?`, pic: null, choices: [{ v: r }, { v: add ? Math.abs(x - y) : x + y, tag: add ? 'subtracts' : 'adds' }, ...near(r, 0, 10).map(v => ({ v, tag: 'off-by-one' }))], fact: `${sayN(x)} ${add ? 'plus' : 'take away'} ${sayN(y)} is ${sayN(r)}.`, why: add ? `${sayN(x)} plus ${sayN(y)}. Put up ${sayN(x)} fingers, then ${sayN(y)} more. ${sayN(r)}.` : `${sayN(x)} take away ${sayN(y)}. Put down ${sayN(y)} fingers. ${sayN(r)} left.`, showDots: add ? null : x, cross: add ? 0 : y, groups: add ? [x, y] : null, hint: 'Use your fingers.' }); },
+  '1.OA.C.6'(){ const add = Math.random() < .5; if (add){ const a = rnd(5, 12), b = rnd(3, Math.min(9, 20 - a)); return mk({ std: '1.OA.C.6', lc: 'add within 20, counting on or making ten', text: `${a} + ${b} = ?`, eq: true, say: `${sayN(a)} plus ${sayN(b)}.`, pic: { kind: 'frame', a, b }, choices: [{ v: a + b }, { v: a + b - 1, tag: 'off-by-one' }, { v: a + b + 1, tag: 'off-by-one' }, { v: Math.abs(a - b), tag: 'subtracts' }], fact: `${sayN(a)} plus ${sayN(b)} is ${sayN(a + b)}.`, why: a + b > 10 && a < 10 ? `Make ten: ${sayN(a)} needs ${sayN(10 - a)} to make ten, so take ${sayN(10 - a)} from ${sayN(b)}. Ten and ${sayN(b - (10 - a))} is ${sayN(a + b)}.` : `Count on from ${sayN(a)}: ${sayN(b)} more makes ${sayN(a + b)}.`, hint: 'Fill the first ten frame, then count what is left over.' }); }
+    const a = rnd(11, 20), b = rnd(2, 9); return mk({ std: '1.OA.C.6', lc: 'subtract within 20', text: `${a} − ${b} = ?`, eq: true, say: `${sayN(a)} minus ${sayN(b)}.`, pic: { kind: 'frame', a, cross: b }, choices: [{ v: a - b }, { v: a + b, tag: 'adds' }, { v: a - b + 1, tag: 'off-by-one' }, { v: a - b - 1, tag: 'off-by-one' }], fact: `${sayN(a)} minus ${sayN(b)} is ${sayN(a - b)}.`, why: `${sayN(a)} minus ${sayN(b)}. Cross out ${sayN(b)} and count what is left: ${sayN(a - b)}.`, hint: 'Cross out from the end and count what is left.' }); },
+  '1.NBT.B.2'(){ const t = rnd(2, 9), o = rnd(1, 9); if (Math.random() < .5) return mk({ std: '1.NBT.B.2', lc: 'given tens and ones, write the two-digit number', text: `${t} tens and ${o} ones. What number?`, say: `${sayN(t)} tens and ${sayN(o)} ones. What number is that?`, pic: { kind: 'rods', t, o }, choices: [{ v: t * 10 + o }, { v: o * 10 + t, tag: 'swapped' }, { v: t + o, tag: 'adds-digits' }, { v: t * 10 + o + 10, tag: 'off-by-one' }], fact: `${sayN(t)} tens and ${sayN(o)} ones is ${t * 10 + o}.`, why: `${sayN(t)} tens is ${t * 10}. And ${sayN(o)} ones makes ${t * 10 + o}.`, hint: 'Count the long rods by tens, then add the little ones.' });
+    const n = t * 10 + o; return mk({ std: '1.NBT.B.2', lc: 'decompose a two-digit number into tens and ones', text: `How many tens are in ${n}?`, say: `How many tens are in ${n}?`, pic: { kind: 'rods', t, o }, choices: [{ v: t }, { v: o, tag: 'swapped' }, { v: n, tag: 'adds-digits' }, { v: t + 1, tag: 'off-by-one' }], fact: `${n} has ${sayN(t)} tens.`, why: `${n} is ${sayN(t)} tens and ${sayN(o)} ones. The first digit tells the tens: ${sayN(t)}.`, hint: 'The first digit counts the tens.' }); },
+  '1.OA.A.1'(){ const n = pick(NAMES), t = pick(THINGS); const kind = pick(['add', 'take', 'cmp']); if (kind === 'add'){ const a = rnd(4, 12), b = rnd(3, Math.min(8, 20 - a)); return mk({ std: '1.OA.A.1', lc: 'adding-to story within 20', text: `${n} has ${a} ${t[1]}. ${n} gets ${b} more. How many now?`, say: `${n} has ${sayN(a)} ${t[1]}. Then ${n} gets ${sayN(b)} more. How many ${t[1]} does ${n} have now?`, pic: null, choices: [{ v: a + b }, { v: a - b, tag: 'subtracts' }, { v: a + b + 1, tag: 'off-by-one' }, { v: b, tag: 'part' }], fact: `Getting more means add: ${sayN(a + b)}.`, why: `Getting more means add. ${sayN(a)} plus ${sayN(b)} is ${sayN(a + b)}.`, hint: 'Gets more means we add.' }); }
+    if (kind === 'take'){ const a = rnd(8, 20), b = rnd(2, 7); return mk({ std: '1.OA.A.1', lc: 'taking-from story within 20', text: `${n} had ${a} ${t[1]} and gave away ${b}. How many are left?`, say: `${n} had ${sayN(a)} ${t[1]} and gave away ${sayN(b)}. How many are left?`, pic: null, choices: [{ v: a - b }, { v: a + b, tag: 'adds' }, { v: a - b - 1, tag: 'off-by-one' }, { v: b, tag: 'part' }], fact: `Gave away means take away: ${sayN(a - b)}.`, why: `Gave away means take away. ${sayN(a)} minus ${sayN(b)} is ${sayN(a - b)}.`, hint: 'Gave away means we subtract.' }); }
+    const a = rnd(6, 15), b = rnd(2, 5); return mk({ std: '1.OA.A.1', lc: 'compare story within 20', text: `${n} has ${a} ${t[1]}. Jo has ${b} fewer. How many does Jo have?`, say: `${n} has ${sayN(a)} ${t[1]}. Jo has ${sayN(b)} fewer. How many does Jo have?`, pic: null, choices: [{ v: a - b }, { v: a + b, tag: 'adds' }, { v: b, tag: 'part' }, { v: a - b + 1, tag: 'off-by-one' }], fact: `Fewer means less: ${sayN(a - b)}.`, why: `Fewer means less. ${sayN(a)} minus ${sayN(b)} is ${sayN(a - b)}.`, hint: 'Fewer means a smaller number.' }); },
+  '2.NBT.B.5'(){ const add = Math.random() < .5; if (add){ const a = rnd(23, 68), b = rnd(14, 99 - a); const noc = (Math.floor(a / 10) + Math.floor(b / 10)) * 10 + ((a % 10 + b % 10) % 10); return mk({ std: '2.NBT.B.5', lc: 'fluently add within 100', text: `${a} + ${b} = ?`, eq: true, say: `${a} plus ${b}.`, pic: null, choices: [{ v: a + b }, { v: noc !== a + b ? noc : a + b + 10, tag: 'no-regroup' }, { v: a + b + 1, tag: 'off-by-one' }, { v: Math.abs(a - b), tag: 'subtracts' }], fact: `${a} plus ${b} is ${a + b}.`, why: `Tens first: ${Math.floor(a / 10) * 10} and ${Math.floor(b / 10) * 10} is ${(Math.floor(a / 10) + Math.floor(b / 10)) * 10}. Ones: ${a % 10} and ${b % 10} is ${a % 10 + b % 10}. Together ${a + b}.`, hint: 'Add the tens, add the ones, then put them together.' }); }
+    const a = rnd(41, 99), b = rnd(12, a - 10); const nob = (Math.floor(a / 10) - Math.floor(b / 10)) * 10 + Math.abs(a % 10 - b % 10); return mk({ std: '2.NBT.B.5', lc: 'fluently subtract within 100', text: `${a} − ${b} = ?`, eq: true, say: `${a} minus ${b}.`, pic: null, choices: [{ v: a - b }, { v: nob !== a - b ? nob : a - b + 10, tag: 'no-regroup' }, { v: a + b, tag: 'adds' }, { v: a - b - 1, tag: 'off-by-one' }], fact: `${a} minus ${b} is ${a - b}.`, why: `Count up from ${b}: to ${Math.ceil(b / 10) * 10} is ${Math.ceil(b / 10) * 10 - b}, then on to ${a} is ${a - Math.ceil(b / 10) * 10} more. All together ${a - b}.`, hint: 'Count up from the small number to the big one.' }); },
+  '2.OA.A.1'(){ const n = pick(NAMES), t = pick(THINGS); const a = rnd(20, 60), b = rnd(5, 15), c = rnd(3, 12); return mk({ std: '2.OA.A.1', lc: 'two-step story within 100', text: `${n} had ${a} ${t[1]}, gave away ${b}, then found ${c} more. How many now?`, say: `${n} had ${a} ${t[1]}, gave away ${b}, then found ${c} more. How many now?`, pic: null, choices: [{ v: a - b + c }, { v: a - b, tag: 'skips-step' }, { v: a - b - c, tag: 'wrong-op' }, { v: a + b + c, tag: 'wrong-op' }], fact: `${a} minus ${b} is ${a - b}, plus ${c} is ${a - b + c}.`, why: `Two steps. First ${a} minus ${b} is ${a - b}. Then ${a - b} plus ${c} is ${a - b + c}.`, hint: 'Do one step at a time: gave away first, then found.' }); },
+  '2.MD.C.8'(){ const d = rnd(1, 4), p = rnd(1, 4), nk = rnd(0, 2); const v = d * 10 + nk * 5 + p; const parts = [`${d} dime${d > 1 ? 's' : ''}`]; if (nk) parts.push(`${nk} nickel${nk > 1 ? 's' : ''}`); parts.push(`${p} penn${p > 1 ? 'ies' : 'y'}`); return mk({ std: '2.MD.C.8', lc: 'count a mix of coins in cents', text: `${parts.join(', ')}. How many cents?`, say: `${parts.join(', ')}. How many cents is that?`, pic: { kind: 'coins', d, nk, p }, choices: [{ v: v + '¢' }, { v: (d + nk + p) + '¢', tag: 'counts-coins' }, { v: (v + 5) + '¢', tag: 'off-by-one' }, { v: (d * 10 + nk * 10 + p) + '¢', tag: 'counts-coins' }], fact: `That is ${v} cents.`, why: `Dimes are 10 each: ${d * 10}. ${nk ? `Nickels are 5 each: ${nk * 5}. ` : ''}Pennies are 1 each: ${p}. Total ${v} cents.`, hint: 'A dime is 10, a nickel is 5, a penny is 1.' }); },
+  '3.OA.C.7'(){ if (Math.random() < .55){ const a = rnd(2, 9), b = rnd(2, 9); return mk({ std: '3.OA.C.7', lc: 'know products of one-digit numbers', text: `${a} × ${b} = ?`, eq: true, say: `${sayN(a)} times ${sayN(b)}.`, pic: { kind: 'array', r: a, c: b }, choices: [{ v: a * b }, { v: a + b, tag: 'adds' }, { v: a * (b + 1), tag: 'skip-count' }, { v: a * (b - 1), tag: 'skip-count' }], fact: `${sayN(a)} times ${sayN(b)} is ${a * b}.`, why: `${sayN(a)} rows of ${sayN(b)}. Skip count by ${sayN(b)}: ${Array.from({ length: a }, (_, i) => b * (i + 1)).join(', ')}. ${a * b}.`, hint: `Skip count by ${b}, ${a} times.` }); }
+    const b = rnd(2, 9), q = rnd(2, 9), a = b * q; return mk({ std: '3.OA.C.7', lc: 'divide within 100 using the relationship with multiplication', text: `${a} ÷ ${b} = ?`, eq: true, say: `${a} divided by ${sayN(b)}.`, pic: { kind: 'array', r: b, c: q, hide: true }, choices: [{ v: q }, { v: a - b, tag: 'subtracts' }, { v: q + 1, tag: 'off-by-one' }, { v: q - 1, tag: 'off-by-one' }], fact: `${a} divided by ${sayN(b)} is ${sayN(q)}.`, why: `Think: ${sayN(b)} times what makes ${a}? ${sayN(b)} times ${sayN(q)} is ${a}. So ${a} divided by ${sayN(b)} is ${sayN(q)}.`, hint: `What times ${b} makes ${a}?` }); },
+  '3.NF.A.1'(){ const b = pick([2, 3, 4, 6, 8]), a = rnd(1, b - 1); return mk({ std: '3.NF.A.1', lc: 'name the fraction a/b of a shaded whole', text: `What fraction is shaded?`, say: `What fraction of the bar is shaded?`, pic: { kind: 'frac', a, b }, choices: [{ v: fracStr(a, b) }, { v: fracStr(a, b - a), tag: 'part-to-part' }, { v: fracStr(b, a), tag: 'upside-down' }, { v: fracStr(b - a, b), tag: 'part-to-part' }], fact: `${fracSay(a, b)} is shaded.`, why: `The bar has ${sayN(b)} equal parts, so the bottom is ${sayN(b)}. ${sayN(a)} are shaded, so the top is ${sayN(a)}. ${fracSay(a, b)}.`, hint: 'Bottom: how many parts in all. Top: how many are shaded.' }); },
+  '3.OA.A.3'(){ const g = rnd(3, 8), e = rnd(3, 9), t = pick(THINGS), n = pick(NAMES); return mk({ std: '3.OA.A.3', lc: 'equal-groups story with multiplication', text: `${n} has ${g} bags with ${e} ${t[1]} in each. How many ${t[1]}?`, say: `${n} has ${sayN(g)} bags with ${sayN(e)} ${t[1]} in each bag. How many ${t[1]} in all?`, pic: { kind: 'array', r: g, c: e, emoji: t[2] }, choices: [{ v: g * e }, { v: g + e, tag: 'adds' }, { v: g * e + e, tag: 'skip-count' }, { v: g * e - g, tag: 'skip-count' }], fact: `${sayN(g)} groups of ${sayN(e)} is ${g * e}.`, why: `${sayN(g)} groups of ${sayN(e)} is ${sayN(g)} times ${sayN(e)}, which is ${g * e}.`, hint: 'Equal groups means multiply: groups times how many in each.' }); },
+  '4.NBT.B.5'(){ if (Math.random() < .5){ const a = rnd(13, 48), b = rnd(3, 9); const dw = Number(String(Math.floor(a / 10) * b) + String((a % 10) * b)); return mk({ std: '4.NBT.B.5', lc: 'multiply a two-digit number by a one-digit number', text: `${a} × ${b} = ?`, eq: true, say: `${a} times ${sayN(b)}.`, pic: null, choices: [{ v: a * b }, { v: dw !== a * b ? dw : a * b + 10, tag: 'digitwise' }, { v: a * b + b, tag: 'off-by-one' }, { v: a * b - 10, tag: 'off-by-one' }], fact: `${a} times ${sayN(b)} is ${a * b}.`, why: `Break ${a} into ${Math.floor(a / 10) * 10} and ${a % 10}. ${Math.floor(a / 10) * 10} times ${b} is ${Math.floor(a / 10) * 10 * b}; ${a % 10} times ${b} is ${(a % 10) * b}. Add: ${a * b}.`, hint: 'Split into tens and ones, multiply each, then add.' }); }
+    const a = rnd(12, 29), b = rnd(11, 25); return mk({ std: '4.NBT.B.5', lc: 'multiply two two-digit numbers', text: `${a} × ${b} = ?`, eq: true, say: `${a} times ${b}.`, pic: null, choices: [{ v: a * b }, { v: Math.floor(a / 10) * 10 * Math.floor(b / 10) * 10 + (a % 10) * (b % 10), tag: 'digitwise' }, { v: a * b + a, tag: 'off-by-one' }, { v: a * b - b, tag: 'off-by-one' }], fact: `${a} times ${b} is ${a * b}.`, why: `Four parts: ${Math.floor(a / 10) * 10}×${Math.floor(b / 10) * 10}, ${Math.floor(a / 10) * 10}×${b % 10}, ${a % 10}×${Math.floor(b / 10) * 10}, ${a % 10}×${b % 10}. They add to ${a * b}.`, hint: 'Use an area model: tens times tens, tens times ones, twice, ones times ones.' }); },
+  '4.NF.A.2'(){ const pairs = [[2, 3, 3, 5], [3, 4, 5, 8], [1, 2, 3, 8], [2, 5, 3, 10], [5, 6, 7, 12], [3, 5, 4, 6], [1, 3, 2, 5], [3, 8, 2, 4]]; let [a, b, c, d] = pick(pairs); if (Math.random() < .5) [a, b, c, d] = [c, d, a, b]; const left = a * d > c * b; return mk({ std: '4.NF.A.2', lc: 'compare two fractions with different numerators and denominators', text: `Which is bigger, ${fracStr(a, b)} or ${fracStr(c, d)}?`, say: `Which is bigger, ${fracSay(a, b)} or ${fracSay(c, d)}?`, pic: { kind: 'frac2', a, b, c, d }, choices: [{ v: left ? fracStr(a, b) : fracStr(c, d) }, { v: left ? fracStr(c, d) : fracStr(a, b), tag: (b > d) === left ? 'bigger-bottom' : 'bigger-top' }, { v: 'the same', tag: 'equal' }], txt: true, fact: `${left ? fracSay(a, b) : fracSay(c, d)} is bigger.`, why: `Same bottoms: ${fracStr(a * d, b * d)} and ${fracStr(c * b, b * d)}. ${a * d} is ${left ? 'more' : 'less'} than ${c * b}, so ${left ? fracSay(a, b) : fracSay(c, d)} is bigger.`, hint: 'Make the bottoms the same, then compare the tops.' }); },
+  '4.OA.A.3'(){ const n = pick(NAMES), b = rnd(3, 8), e = rnd(8, 24), g = rnd(5, b * e - 10); return mk({ std: '4.OA.A.3', lc: 'multi-step story with whole numbers', text: `A box holds ${e} crayons. ${n} buys ${b} boxes and gives away ${g} crayons. How many are left?`, say: `A box holds ${e} crayons. ${n} buys ${sayN(b)} boxes and gives away ${g} crayons. How many are left?`, pic: null, choices: [{ v: b * e - g }, { v: b * e, tag: 'skips-step' }, { v: b * e + g, tag: 'wrong-op' }, { v: b + e - g, tag: 'adds' }], fact: `${sayN(b)} boxes of ${e} is ${b * e}, minus ${g} is ${b * e - g}.`, why: `First ${sayN(b)} boxes of ${e}: ${b * e}. Then give away ${g}: ${b * e - g}.`, hint: 'First find how many crayons in all the boxes.' }); },
+  '5.NF.A.1'(){ const pairs = [[1, 2, 1, 3], [1, 2, 1, 4], [2, 3, 1, 6], [1, 4, 1, 3], [3, 4, 1, 8], [2, 5, 1, 2], [1, 3, 1, 6], [3, 8, 1, 4]]; const [a, b, c, d] = pick(pairs); const sub = Math.random() < .4 && a * d > c * b; const l = b * d / gcd(b, d); const top = sub ? a * (l / b) - c * (l / d) : a * (l / b) + c * (l / d); const g = gcd(top, l) || 1; const ans = fracStr(top / g, l / g); return mk({ std: '5.NF.A.1', lc: `${sub ? 'subtract' : 'add'} fractions with unlike denominators`, text: `${fracStr(a, b)} ${sub ? '−' : '+'} ${fracStr(c, d)} = ?`, eq: true, say: `${fracSay(a, b)} ${sub ? 'minus' : 'plus'} ${fracSay(c, d)}.`, pic: null, choices: [{ v: ans }, { v: fracStr(sub ? a - c : a + c, b + d), tag: 'tops-and-bottoms' }, { v: fracStr(top / g + 1, l / g), tag: 'off-by-one' }, { v: fracStr(sub ? Math.abs(a - c) : a + c, Math.max(b, d)), tag: 'tops-and-bottoms' }], fact: `It is ${ans}.`, why: `Same bottoms first: ${fracStr(a * (l / b), l)} and ${fracStr(c * (l / d), l)}. ${sub ? 'Subtract' : 'Add'} the tops: ${top}. So ${fracStr(top, l)}${g > 1 ? ', which is ' + ans : ''}.`, hint: 'Find a common bottom number, then only the tops change.' }); },
+  '5.NBT.B.7'(){ const k = pick(['add', 'sub', 'mul']); const f2 = x => (Math.round(x * 100) / 100).toString(); if (k === 'mul'){ const a = pick([0.5, 1.5, 2.5, 0.25, 1.2, 0.4]), b = rnd(2, 8); return mk({ std: '5.NBT.B.7', lc: 'multiply a decimal by a whole number', text: `${a} × ${b} = ?`, eq: true, say: `${a} times ${sayN(b)}.`, pic: null, choices: [{ v: f2(a * b) }, { v: f2(a * b * 10), tag: 'misaligned' }, { v: f2(a * b / 10), tag: 'misaligned' }, { v: f2(a * b + 1), tag: 'off-by-one' }], fact: `${a} times ${sayN(b)} is ${f2(a * b)}.`, why: `${a} is ${Math.round(a * 100)} hundredths. ${Math.round(a * 100)} times ${b} is ${Math.round(a * 100) * b} hundredths, which is ${f2(a * b)}.`, hint: 'Multiply as whole numbers, then put the decimal back.' }); }
+    const a = rnd(11, 89) / 10, b = rnd(105, 395) / 100; const sub = k === 'sub'; const x = sub ? Math.max(a, b) : a, y = sub ? Math.min(a, b) : b; const r = sub ? x - y : x + y; const mis = sub ? Math.abs(x - y * 10) : x + y * 10; return mk({ std: '5.NBT.B.7', lc: `${sub ? 'subtract' : 'add'} decimals to hundredths`, text: `${x} ${sub ? '−' : '+'} ${y} = ?`, eq: true, say: `${x} ${sub ? 'minus' : 'plus'} ${y}.`, pic: null, choices: [{ v: f2(r) }, { v: f2(mis), tag: 'misaligned' }, { v: f2(r + 0.1), tag: 'off-by-one' }, { v: f2(r - 0.01), tag: 'off-by-one' }], fact: `${x} ${sub ? 'minus' : 'plus'} ${y} is ${f2(r)}.`, why: `Line up the decimal points, then ${sub ? 'subtract' : 'add'} like whole numbers: ${f2(r)}.`, hint: 'Write them one above the other with the decimal points lined up.' }); }
+};
+function genRound(level){
+  const L = LEVELS[level]; const keys = level === 0 ? ['PK:K.CC.B.5', 'PK:K.CC.C.6', 'PK:K.CC.A.3', 'PK:K.CC.B.5', 'PK:K.CC.C.6'] : (() => { const out = []; let i = 0; while (out.length < PER_ROUND){ out.push(L.stds[i % L.stds.length]); i++; } return out; })();
+  return shuffle(keys).map(k => Object.assign(GEN[k](), { gen: k }));
+}
+// What to say about a wrong pick, from its Learning Commons misconception tag. Always names the answer.
+function trapLine(it, picked, tag){
+  const a = it.ans;
+  const T = {
+    'off-by-one': it.count ? `You said ${picked}. There are ${a}. Tap Show me and we count them together.` : `Close! It is ${a}.`,
+    'reversed': `Look again: ${a} is the bigger pile.`, 'numeral': `That one is ${picked}. This is ${a}.`,
+    'adds': `This story takes away, so we subtract. It is ${a}.`, 'subtracts': `This story gets more, so we add. It is ${a}.`,
+    'part': `${picked} is only one part. All together it is ${a}.`, 'swapped': `Tens first, then ones. It is ${a}.`,
+    'adds-digits': `A ten is worth ten, not one. It is ${a}.`, 'no-regroup': `When the ones pass nine, carry a ten. It is ${a}.`,
+    'counts-coins': `Count what the coins are worth, not how many. It is ${a}.`, 'part-to-part': `The bottom counts all the parts. It is ${a}.`,
+    'upside-down': `Shaded on top, all the parts on the bottom: ${a}.`, 'bigger-bottom': `A bigger bottom number means smaller pieces. ${a} is bigger.`,
+    'bigger-top': `Compare the whole fractions, not just the tops. ${a} is bigger.`, 'equal': `They are not the same. ${a} is bigger.`,
+    'tops-and-bottoms': `Never add the bottoms. Make them the same first: ${a}.`, 'digitwise': `Multiply the tens too, not digit by digit. It is ${a}.`,
+    'misaligned': `Line up the decimal points. It is ${a}.`, 'wrong-op': `Read the story again: does it get more, or less? It is ${a}.`,
+    'skips-step': `There are two steps. Do both: ${a}.`, 'skip-count': `Skip count carefully. It is ${a}.`
+  };
+  return T[tag] || `It is ${a}.`;
+}
+// A round the routine wrote (`coach/next`): keep only well-formed items.
+function fromCoach(items){
+  if (!Array.isArray(items)) return null;
+  const out = [];
+  for (const it of items){
+    if (!it || typeof it.text !== 'string' || !Array.isArray(it.choices) || it.choices.length < 2 || it.choices.length > 4) continue;
+    const ch = it.choices.map(c => (typeof c === 'string' ? { v: c, tag: null } : { v: String(c.v ?? ''), tag: typeof c.tag === 'string' ? c.tag.slice(0, 40) : null })).filter(c => c.v);
+    const ans = String(it.ans ?? ''); if (!ch.some(c => c.v === ans)) continue;
+    const pic = it.pic && typeof it.pic === 'object' && ['dots', 'compare', 'frame', 'rods', 'array', 'frac', 'frac2', 'coins'].includes(it.pic.kind) ? it.pic : null;
+    out.push({ std: typeof it.std === 'string' ? it.std.slice(0, 16) : 'coach', lc: typeof it.lc === 'string' ? it.lc.slice(0, 160) : '', text: cap(it.text.slice(0, 220)), say: typeof it.say === 'string' ? it.say.slice(0, 260) : it.text.slice(0, 220), pic, choices: shuffle(ch), ans, why: typeof it.why === 'string' ? cap(it.why.slice(0, 320)) : '', fact: '', hint: typeof it.hint === 'string' ? it.hint.slice(0, 160) : '', eq: !!it.eq, txt: ch.some(c => c.v.length > 6), gen: 'coach' });
+    if (out.length === PER_ROUND) break;
+  }
+  return out.length >= 3 ? out : null;
+}
+
+/* ---------- pictures ---------- */
+const NS = 'http://www.w3.org/2000/svg';
+function svgEl(w, h){ const s = document.createElementNS(NS, 'svg'); s.setAttribute('viewBox', `0 0 ${w} ${h}`); return s; }
+function txt(s, x, y, size, extra){ const t = document.createElementNS(NS, 'text'); t.setAttribute('x', x); t.setAttribute('y', y); t.setAttribute('font-size', size); t.setAttribute('text-anchor', 'middle'); t.setAttribute('dominant-baseline', 'central'); if (extra) for (const k in extra) t.setAttribute(k, extra[k]); t.textContent = s; return t; }
+function rect(x, y, w, h, fill, extra){ const r = document.createElementNS(NS, 'rect'); r.setAttribute('x', x); r.setAttribute('y', y); r.setAttribute('width', w); r.setAttribute('height', h); r.setAttribute('fill', fill); r.setAttribute('rx', 5); r.setAttribute('stroke', INK); r.setAttribute('stroke-width', 1.5); if (extra) for (const k in extra) r.setAttribute(k, extra[k]); return r; }
+function line(x1, y1, x2, y2, extra){ const l = document.createElementNS(NS, 'line'); l.setAttribute('x1', x1); l.setAttribute('y1', y1); l.setAttribute('x2', x2); l.setAttribute('y2', y2); l.setAttribute('stroke', INK); l.setAttribute('stroke-width', 3); l.setAttribute('stroke-linecap', 'round'); if (extra) for (const k in extra) l.setAttribute(k, extra[k]); return l; }
+function circ(cx, cy, r, fill, extra){ const c = document.createElementNS(NS, 'circle'); c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', r); c.setAttribute('fill', fill); c.setAttribute('stroke', INK); c.setAttribute('stroke-width', 1.5); if (extra) for (const k in extra) c.setAttribute(k, extra[k]); return c; }
+const C = { mustard: '#f4b829', tomato: '#ef6a4c', mint: '#93d3b0', cobalt: '#76a0e2', blush: '#f3a6bb', card: '#fbfaf3', tag: '#fff4d6', paper: '#f2efe7', muted: '#857d6e' };
+function dotsPic(p, reveal){
+  const n = Math.min(20, p.n | 0); const cols = p.arr === 'array' ? Math.min(5, Math.ceil(Math.sqrt(n * 1.6))) : Math.min(10, n); const rows = Math.ceil(n / cols);
+  const cell = 44, w = cols * cell + 20, h = (p.arr === 'circle' ? 2 : rows) * cell + 20; const s = svgEl(w, Math.max(h, 64));
+  s.style.maxWidth = Math.round(w * 1.5) + 'px'; s.style.margin = '0 auto';
+  for (let i = 0; i < n; i++){
+    let x, y; if (p.arr === 'circle'){ const a = (i / n) * Math.PI * 2 - Math.PI / 2; x = w / 2 + Math.cos(a) * (w / 2 - 30); y = 54 + Math.sin(a) * 30; } else { x = 10 + (i % cols) * cell + cell / 2; y = 10 + Math.floor(i / cols) * cell + cell / 2; }
+    const g = document.createElementNS(NS, 'g'); g.setAttribute('class', 'd');
+    if (p.groups && i >= p.groups[0]) g.append(circ(x, y, 19, C.tag, { 'stroke-dasharray': '3 2' }));
+    g.append(txt(p.emoji || '●', x, y, 28));
+    if (reveal && p.cross && i >= n - p.cross){ g.append(line(x - 14, y - 14, x + 14, y + 14, { stroke: C.tomato, 'stroke-width': 4 })); g.append(line(x + 14, y - 14, x - 14, y + 14, { stroke: C.tomato, 'stroke-width': 4 })); }
+    s.append(g);
+  }
+  return s;
+}
+function comparePic(p){
+  const s = svgEl(400, 110); s.append(rect(4, 4, 190, 102, C.card)); s.append(rect(206, 4, 190, 102, C.tag));
+  for (let i = 0; i < Math.min(10, p.a); i++) s.append(txt(p.ea, 22 + (i % 5) * 36, 30 + Math.floor(i / 5) * 40, 26, { class: 'd' }));
+  for (let i = 0; i < Math.min(10, p.b); i++) s.append(txt(p.eb, 224 + (i % 5) * 36, 30 + Math.floor(i / 5) * 40, 26, { class: 'd' }));
+  return s;
+}
+function framePic(p, reveal){
+  const a = Math.min(20, p.a | 0), b = Math.min(20, p.b | 0), total = Math.min(20, a + b); const s = svgEl(460, 110);
+  for (let f = 0; f < 2; f++) for (let i = 0; i < 10; i++){ const x = 10 + f * 235 + (i % 5) * 44, y = 10 + Math.floor(i / 5) * 44; s.append(rect(x, y, 40, 40, C.card)); }
+  for (let i = 0; i < total; i++){ const f = i < 10 ? 0 : 1, j = i % 10; const cx = 30 + f * 235 + (j % 5) * 44, cy = 30 + Math.floor(j / 5) * 44; s.append(circ(cx, cy, 15, i < a ? C.cobalt : C.mustard, { class: 'd' })); if (reveal && p.cross && i >= a - p.cross){ s.append(line(cx - 11, cy - 11, cx + 11, cy + 11, { stroke: C.tomato, 'stroke-width': 4 })); s.append(line(cx + 11, cy - 11, cx - 11, cy + 11, { stroke: C.tomato, 'stroke-width': 4 })); } }
+  return s;
+}
+function rodsPic(p){ const s = svgEl(460, 120); for (let i = 0; i < Math.min(9, p.t); i++) s.append(rect(10 + i * 30, 10, 20, 100, C.cobalt, { class: 'd' })); for (let i = 0; i < Math.min(9, p.o); i++) s.append(rect(300 + (i % 3) * 30, 10 + Math.floor(i / 3) * 30, 22, 22, C.mustard, { class: 'd' })); return s; }
+function arrayPic(p, reveal){
+  const r = Math.min(9, p.r | 0), c = Math.min(10, p.c | 0); const cell = 40; const s = svgEl(c * cell + 10, r * cell + 10);
+  if (p.hide && !reveal){ s.append(txt('?', (c * cell + 10) / 2, (r * cell + 10) / 2, 48, { 'font-weight': 900, fill: C.muted })); return s; }
+  for (let i = 0; i < r; i++) for (let j = 0; j < c; j++){ const x = 5 + j * cell + cell / 2, y = 5 + i * cell + cell / 2; if (p.emoji) s.append(txt(p.emoji, x, y, 24, { class: 'd' })); else s.append(circ(x, y, 14, i % 2 ? C.mustard : C.cobalt, { class: 'd' })); }
+  return s;
+}
+function fracBar(s, y, a, b, w){ const pw = (w - 4) / b; for (let i = 0; i < b; i++) s.append(rect(2 + i * pw, y, pw - 3, 52, i < a ? C.tomato : C.card, { class: 'd' })); }
+function fracPic(p){ const s = svgEl(460, 60); fracBar(s, 4, p.a, p.b, 460); return s; }
+function frac2Pic(p){ const s = svgEl(460, 150); fracBar(s, 4, p.a, p.b, 460); s.append(txt(fracStr(p.a, p.b), 430, 30, 18, { 'font-weight': 900 })); fracBar(s, 84, p.c, p.d, 460); s.append(txt(fracStr(p.c, p.d), 430, 110, 18, { 'font-weight': 900 })); return s; }
+function coinsPic(p){ const s = svgEl(460, 70); let x = 30; const coin = (r, fill, label) => { s.append(circ(x, 35, r, fill, { class: 'd' })); s.append(txt(label, x, 35, 12, { 'font-weight': 900 })); x += r * 2 + 14; }; for (let i = 0; i < p.d; i++) coin(18, C.card, '10'); for (let i = 0; i < (p.nk || 0); i++) coin(22, C.paper, '5'); for (let i = 0; i < p.p; i++) coin(16, C.mustard, '1'); return s; }
+function picFor(it, reveal){
+  const p = it.pic;
+  if (!p){ if (reveal && it.showDots) return dotsPic({ n: it.showDots, emoji: '●', arr: 'line', cross: it.cross }, true); if (reveal && it.groups) return dotsPic({ n: it.groups[0] + it.groups[1], groups: it.groups, emoji: '●', arr: 'line' }, true); return null; }
+  if (p.kind === 'dots') return dotsPic(p, reveal); if (p.kind === 'compare') return comparePic(p); if (p.kind === 'frame') return framePic(p, reveal); if (p.kind === 'rods') return rodsPic(p); if (p.kind === 'array') return arrayPic(p, reveal); if (p.kind === 'frac') return fracPic(p); if (p.kind === 'frac2') return frac2Pic(p); if (p.kind === 'coins') return coinsPic(p);
+  return null;
+}
+
+/* ---------- voice: one stream; the live line shows whatever was last said ---------- */
+let speakGen = 0;
+function setLive(kind, text){ $('liveKind').dataset.kind = kind; $('liveKind').textContent = kind === 'you' ? 'You' : kind === 'quiz' ? 'Oops' : 'Sprout'; $('liveText').textContent = text; }
+async function say(text, kind){
+  if (kind) setLive(kind, text);
+  if (!voiceOn || !text || !hasSprout || !sprout.tts || typeof sprout.tts.speak !== 'function') return;
+  const g = ++speakGen; try { await sprout.tts.stop(); } catch {}
+  if (g !== speakGen) return;
+  $('live').classList.add('on');
+  try { await sprout.tts.speak({ text }); } catch {}
+  if (g === speakGen) $('live').classList.remove('on');
+}
+function quiet(){ speakGen++; try { if (hasSprout && sprout.tts && sprout.tts.stop) sprout.tts.stop().catch(() => {}); } catch {} $('live').classList.remove('on'); }
+// The kid hears the question before the choices open (an estimate: speak resolving is not audio done).
+function freeze(text){
+  clearTimeout(frozenT); $('choices').classList.add('frozen');
+  const ms = Math.min(900 + text.split(' ').length * 300, 5000);
+  frozenT = setTimeout(() => $('choices').classList.remove('frozen'), hasSprout && sprout.tts ? ms : 0);
+}
+function replay(){ const it = curItem(); if (it && !S.cur.answers[S.cur.i]) say(it.say || it.text, 'reply'); else if (it) say($('liveText').textContent, $('liveKind').dataset.kind); }
+
+/* ---------- the figure: an inked hill with seven rungs ---------- */
+function f1(n){ return Math.round(n * 10) / 10; }
+function tag2(x, y, dx, dy, text, on){
+  const fs = 10.5, h = fs * 1.8, w = text.length * fs * .62 + fs * 1.5, cx = x + dx, cy = y + dy;
+  return `<g><path d="M${f1(x)} ${f1(y)}L${f1(cx)} ${f1(cy)}" fill="none" stroke="${INK}" stroke-width="1"/><circle cx="${f1(x)}" cy="${f1(y)}" r="1.8" fill="${INK}"/>`
+    + `<rect x="${f1(cx - w / 2)}" y="${f1(cy - h / 2)}" width="${f1(w)}" height="${f1(h)}" rx="${f1(h / 2)}" fill="${on ? C.mustard : C.tag}" stroke="${INK}" stroke-width="1.2"/>`
+    + `<text x="${f1(cx)}" y="${f1(cy + fs * .36)}" font-size="${fs}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${esc(text)}</text></g>`;
+}
+function drawFigure(){
+  const svg = $('fig'); if (!svg) return;
+  const level = S.cur ? S.cur.level : S.level, pm = passedMap(), busy = waitingOnCoach();
+  svg.setAttribute('viewBox', '0 0 560 250');
+  const steps = LEVELS.map((L, i) => ({ x: 40 + i * 78, y: 215 - i * 24 }));
+  let s = `<defs><filter id="hand" x="-3%" y="-3%" width="106%" height="106%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="2" seed="4" result="warp"/><feDisplacementMap in="SourceGraphic" in2="warp" scale="2.4" xChannelSelector="R" yChannelSelector="G" result="wob"/><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="11" result="n1"/><feColorMatrix in="n1" type="matrix" values=".3 0 0 0 .84  .3 0 0 0 .84  .3 0 0 0 .84  0 0 0 0 1" result="grain"/><feBlend in="wob" in2="grain" mode="multiply" result="g1"/><feComposite in="g1" in2="wob" operator="in"/></filter></defs>`;
+  s += `<g filter="url(#hand)">`;
+  s += `<g id="sun" opacity="${busy ? 1 : .9}"><circle cx="500" cy="48" r="26" fill="${busy ? '#fff7c9' : C.mustard}" stroke="${INK}" stroke-width="1.5"/>${busy ? `<circle cx="500" cy="48" r="40" fill="#fff4d6" opacity=".6"/>` : ''}</g>`;
+  s += `<path d="M0 236 C 90 232, 130 200, 190 190 S 320 150, 380 128 S 500 86, 560 70 L560 250 L0 250 Z" fill="#dfe9d2" stroke="${INK}" stroke-width="1.5"/>`;
+  steps.forEach((p, i) => {
+    const fill = i < level ? C.mint : i === level ? C.mustard : C.card;
+    s += `<rect x="${p.x - 24}" y="${p.y - 10}" width="48" height="20" rx="6" fill="${fill}" stroke="${INK}" stroke-width="1.5"/>`;
+    s += `<text x="${p.x}" y="${p.y + 1}" font-size="10" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${esc(LEVELS[i].label.toUpperCase())}</text>`;
+    if (pm[i] != null) s += `<text x="${p.x + 24}" y="${p.y - 14}" font-size="12" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="900" fill="${pm[i] ? INK : C.tomato}">${pm[i] ? '✓' : '×'}</text>`;
+    if (i === level){ s += `<line x1="${p.x}" y1="${p.y - 10}" x2="${p.x}" y2="${p.y - 62}" stroke="${INK}" stroke-width="2.5" stroke-linecap="round"/><path d="M${p.x} ${p.y - 62} l40 10 l-40 10 z" fill="${C.tomato}" stroke="${INK}" stroke-width="1.2"/>`; }
+  });
+  s += `</g>`;
+  const here = steps[level];
+  s += tag2(here.x + 40, here.y - 52, level >= 4 ? -90 : 70, -26, busy ? 'THINKING' : S.cur ? 'CLIMBING' : S.done ? 'PLACED' : 'READY', busy || !!S.cur);
+  svg.innerHTML = s; svg.classList.toggle('think', busy);
+}
+function waitingOnCoach(){ return false; }
+
+/* ---------- home ---------- */
+function passedMap(){ const m = {}; for (const r of S.rounds){ const ok = r.score >= 4; if (m[r.level] == null || ok) m[r.level] = ok; } return m; }
+function renderHome(){
+  const lvl = S.cur ? S.cur.level : S.level;
+  $('homeStats').innerHTML = `<div class="stat"><span class="k">Rung</span><div class="v">${esc(LEVELS[lvl].label.toUpperCase())}</div></div>` + (S.rounds.length ? `<div class="stat small"><span class="k">Right</span><div class="v">${S.rounds.reduce((s, r) => s + r.score, 0)}<small>/ ${S.rounds.reduce((s, r) => s + r.of, 0)}</small></div></div>` : '');
+  drawFigure();
+  $('rungs').innerHTML = LEVELS.map((L, i) => `<span class="k-pill" data-kind="${i === lvl ? 'you' : i < lvl ? 'word' : 'reply'}">${esc(L.label)}</span>`).join('');
+  $('rungK').textContent = `${lvl + 1} of ${LEVELS.length}`;
+  const resuming = !!S.cur && !S.done;
+  const c = $('cont'); if (resuming){ c.innerHTML = `<span style="flex:1;min-width:0"><span class="k">Keep climbing</span><br><span class="t">Round ${S.rounds.length + 1} · ${esc(LEVELS[S.cur.level].label)}</span><br><span class="k">${S.cur.i + 1} of ${PER_ROUND}</span></span><span class="act primary">Open</span>`; c.hidden = false; } else c.hidden = true;
+  const p = lastPlacement || S.placement;
+  $('homeH').textContent = resuming ? 'You were in the middle of a round' : p && p.label ? `Last time: the ${p.label} rung` : 'Ready to climb?';
+  $('bStart').lastElementChild.textContent = resuming ? 'Keep climbing' : (S.done ? 'Climb again' : 'Start climbing');
+}
+
+/* ---------- db ---------- */
+async function openDb(){
+  try { if (hasSprout && typeof sprout.use === 'function') db = await sprout.use('db'); } catch { db = null; }
+  if (!db) return;
+  self = db.self;
+  try {
+    const prof = await db.doc(`data/users/${self}/profile`).get();
+    if (prof.exists && Number.isInteger(prof.data().level)) S.startLevel = Math.max(0, Math.min(LEVELS.length - 1, prof.data().level));
+    const pl = await db.doc(`data/users/${self}/placement`).get();
+    if (pl.exists) lastPlacement = pl.data();
+    if (lastPlacement && Number.isInteger(lastPlacement.level) && S.startLevel == null) S.startLevel = lastPlacement.level;
+  } catch {}
+  if (!S.cur && !S.rounds.length && S.startLevel != null) S.level = S.startLevel;
+}
+let saveT = 0;
+function saveSession(now){
+  if (!db || !S.sid) return;
+  const write = () => { try { db.doc(`data/users/${self}/climb/sessions/${S.sid}`).set(sessionDoc()).catch(() => {}); } catch {} };
+  clearTimeout(saveT); if (now) write(); else saveT = setTimeout(write, 500);
+}
+function sessionDoc(){
+  return { startedAt: S.startedAt || nowIso(), updatedAt: nowIso(), status: S.done ? 'done' : 'playing', level: S.cur ? S.cur.level : S.level, startLevel: S.firstLevel ?? S.level, roundsDone: S.rounds.length, rounds: S.rounds.map(r => ({ level: r.level, levelLabel: LEVELS[r.level].label, score: r.score, of: r.of, source: r.source, items: r.items })), placement: S.placement || null };
+}
+function watchCoach(){
+  if (!db || !S.sid || unsubCoach) return;
+  try { unsubCoach = db.doc(`data/users/${self}/climb/sessions/${S.sid}/coach/next`).onSnapshot(snap => { coach = snap.exists ? snap.data() : null; }, () => {}); } catch {}
+}
+async function wake(round){
+  if (!hasSprout || !sprout.net || typeof sprout.net.fetch !== 'function' || !self || !S.sid) return false;
+  try { const r = await sprout.net.fetch({ url: `${CFG.wake}?sid=${encodeURIComponent(S.sid)}&kid=${encodeURIComponent(self)}&round=${round}&key=${CFG.key}`, accept: 'json' }); return !!(r && r.status === 'ok' && r.body && r.body.ok === true); } catch { return false; }
+}
+
+/* ---------- play ---------- */
+function curItem(){ return S.cur && S.cur.items[S.cur.i] || null; }
+function startClimb(){
+  if (!S.cur || S.done){
+    if (S.done){ S.rounds = []; S.done = false; S.placement = null; S.coachUsed = 0; S.lastCoachRound = -1; S.level = S.startLevel ?? S.level; }
+    S.sid = newId(); S.startedAt = nowIso(); S.firstLevel = S.level; coach = null; if (unsubCoach){ unsubCoach(); unsubCoach = null; }
+    beginRound(S.level, 'ladder');
+  }
+  watchCoach();
+  $('home').hidden = true; $('play').hidden = false; document.body.classList.add('reading');
+  if (hasSprout && sprout.progress){ try { sprout.progress.setup({ total: PER_ROUND }); } catch {} }
+  renderItem(true);
+}
+function goHome(){ quiet(); $('play').hidden = true; $('home').hidden = false; document.body.classList.remove('reading'); renderHome(); scrollTo({ top: 0 }); }
+function beginRound(level, source, items, note){
+  S.cur = { level, i: 0, items: items || genRound(level), answers: [], source, note: note || null, started: nowIso() };
+  saveSession(true);
+}
+function renderItem(speak){
+  const it = curItem(); if (!it) return;
+  $('pTitle').textContent = `Round ${S.rounds.length + 1} · ${LEVELS[S.cur.level].label}`;
+  $('dots').innerHTML = S.cur.items.map((_, j) => { const a = S.cur.answers[j]; return `<i class="${a ? (a.ok ? 'ok' : 'bad') : j === S.cur.i ? 'now' : ''}"></i>`; }).join('');
+  if (hasSprout && sprout.progress){ try { sprout.progress.set({ current: S.cur.i, total: PER_ROUND }); } catch {} }
+  $('qText').textContent = it.text; $('qText').className = it.eq ? 'eq' : '';
+  const pic = picFor(it, false); $('pic').innerHTML = ''; if (pic){ $('pic').append(pic); $('pic').hidden = false; } else $('pic').hidden = true;
+  const ch = $('choices'); ch.innerHTML = it.choices.map((c, j) => `<button class="ch${it.txt || c.v.length > 5 ? ' txt' : ''}" type="button" data-j="${j}">${esc(c.v)}</button>`).join('');
+  $('fb').hidden = true; $('why').hidden = true; $('helpRow').hidden = false;
+  busy = false;
+  setLive('reply', it.say || it.text);
+  if (speak){ freeze(it.say || it.text); say(it.say || it.text, 'reply'); } else ch.classList.remove('frozen');
+}
+$('choices').addEventListener('click', e => { const b = e.target.closest('.ch'); if (!b || busy) return; answer(+b.dataset.j); });
+function answer(j){
+  const it = curItem(); if (!it || busy || S.cur.answers[S.cur.i]) return; busy = true; clearTimeout(frozenT);
+  const c = it.choices[j]; const ok = c.v === it.ans;
+  S.cur.answers[S.cur.i] = { std: it.std, gen: it.gen, text: it.text, picked: c.v, ans: it.ans, ok, tag: ok ? null : (c.tag || 'other'), hinted: !!S.cur.hinted, at: nowIso() }; S.cur.hinted = false;
+  document.querySelectorAll('#choices .ch').forEach((el, k) => { el.disabled = true; if (k === j) el.classList.add(ok ? 'ok' : 'bad'); else if (it.choices[k].v === it.ans) el.classList.add('ok'); else el.classList.add('mute'); });
+  $('dots').children[S.cur.i].className = ok ? 'ok' : 'bad';
+  $('fb').hidden = false; $('helpRow').hidden = true; $('why').hidden = true;
+  $('bNext').textContent = S.cur.i + 1 < S.cur.items.length ? 'Next' : 'Finish round';
+  $('bShow').hidden = !(it.why || it.pic || it.showDots || it.groups);
+  const lineText = ok ? `${pick(['Yes!', 'That is it!', 'Nice one!', 'You got it!'])} ${it.fact || ''}`.trim() : `Not quite. ${trapLine(it, c.v, c.tag)}`;
+  say(lineText, ok ? 'word' : 'quiz');
+  saveSession();
+  busy = false;
+}
+async function showMe(){
+  const it = curItem(); if (!it) return;
+  const pic = picFor(it, true); if (pic){ $('pic').innerHTML = ''; $('pic').append(pic); $('pic').hidden = false; }
+  $('why').textContent = it.why || `The answer is ${it.ans}.`; $('why').hidden = false;
+  const count = it.count || (it.pic && it.pic.kind === 'dots' && !it.pic.cross && !it.pic.groups ? it.pic.n : 0);
+  if (count && pic){ const ds = pic.querySelectorAll('.d'); ds.forEach(d => d.classList.add('dim')); let k = 0; const tick = () => { if (k >= Math.min(count, ds.length)) return; ds[k].classList.remove('dim'); ds[k].classList.add('lit'); if (k) ds[k - 1].classList.remove('lit'); k++; setTimeout(tick, 420); }; setTimeout(tick, 300); }
+  await say(it.why || `The answer is ${it.ans}.`, 'gloss');
+}
+function hint(){ const it = curItem(); if (!it) return; S.cur.hinted = true; say(it.hint || 'Take your time. Listen once more.', 'gloss'); }
+function next(){
+  if (!S.cur || !S.cur.answers[S.cur.i]) return;
+  quiet();
+  if (S.cur.i + 1 < S.cur.items.length){ S.cur.i++; saveSession(); renderItem(true); scrollTo({ top: 0 }); return; }
+  endRound();
+}
+
+/* ---------- rounds and the ladder rule ---------- */
+function endRound(){
+  const r = S.cur; const score = r.answers.filter(a => a.ok).length;
+  S.rounds.push({ level: r.level, score, of: r.items.length, source: r.source, items: r.answers, note: r.note });
+  const n = S.rounds.length; S.cur = null;
+  saveSession(true); wake(n);
+  const v = decide();
+  const label = LEVELS[r.level].label, to = v.stop ? null : LEVELS[Math.max(0, Math.min(LEVELS.length - 1, r.level + v.move))];
+  const verdict = v.stop ? 'You found your rung!' : v.move > 0 ? `Up we go, to ${to.label}!` : v.move < 0 ? `Let us try the ${to.label} rung again.` : 'One more round on this rung.';
+  $('rsTitle').textContent = score >= 4 ? 'Great round!' : score === 3 ? 'Good round' : 'Tough round'; $('rsK').textContent = `Round ${n} · ${label}`;
+  $('rsStats').innerHTML = `<div class="stat"><span class="k">Right</span><div class="v">${score}<small>/ ${r.items.length}</small></div></div><div class="stat"><span class="k">Rung</span><div class="v">${esc(label.toUpperCase())}</div></div><div class="stat"><span class="k">Next</span><div class="v">${v.stop ? '🏁' : v.move > 0 ? '↑' : v.move < 0 ? '↓' : '→'}</div></div>`;
+  $('rsNote').textContent = verdict; $('bRoundGo').textContent = v.stop ? 'See my rung' : 'Keep going';
+  $('roundSheet').hidden = false; $('roundSheet').dataset.move = v.move || 0; $('roundSheet').dataset.stop = v.stop ? '1' : '';
+  say(`${sayN(score)} out of ${sayN(r.items.length)}. ${verdict}`);
+}
+// 4 or 5 right → up, 2 or fewer → down, 3 → stay once. Stop when a passed rung sits right under a failed one, at the ends, or after MAX_ROUNDS.
+function decide(){
+  const last = S.rounds[S.rounds.length - 1], n = S.rounds.length, L = last.level, passed = last.score >= 4, failed = last.score <= 2;
+  const pm = passedMap();
+  if (passed && L === LEVELS.length - 1) return { stop: true, place: L };
+  if (failed && L === 0) return { stop: true, place: 0 };
+  if (passed && pm[L + 1] === false) return { stop: true, place: L };
+  if (failed && pm[L - 1] === true) return { stop: true, place: L - 1 };
+  if (!passed && !failed){ const prev = S.rounds.filter(r => r.level === L); if (prev.length >= 2){ const tot = prev.slice(-2).reduce((s, r) => s + r.score, 0); if (tot >= 7) return pm[L + 1] === false || L === LEVELS.length - 1 ? { stop: true, place: L } : { stop: false, move: 1 }; return pm[L - 1] === true || L === 0 ? { stop: true, place: L === 0 ? 0 : L - 1 } : { stop: false, move: -1 }; } return { stop: false, move: 0 }; }
+  if (n >= MAX_ROUNDS){ let best = -1; for (const k in pm) if (pm[k]) best = Math.max(best, +k); return { stop: true, place: best >= 0 ? best : (passed ? L : Math.max(0, L - 1)) }; }
+  return { stop: false, move: passed ? 1 : -1 };
+}
+function afterRound(){
+  $('roundSheet').hidden = true; quiet();
+  const move = +$('roundSheet').dataset.move || 0, stop = !!$('roundSheet').dataset.stop, n = S.rounds.length;
+  const c = coach && Number.isInteger(coach.afterRound) && coach.afterRound <= n && coach.afterRound > S.lastCoachRound ? coach : null;
+  if (c && c.stop && c.placement && typeof c.placement.label === 'string'){ S.lastCoachRound = c.afterRound; finish(Number.isInteger(c.placement.level) ? c.placement.level : S.rounds[n - 1].level, c.placement); return; }
+  if (stop){ finish(decide().place); return; }
+  if (c){ const items = fromCoach(c.items); const lvl = Number.isInteger(c.level) ? Math.max(0, Math.min(LEVELS.length - 1, c.level)) : Math.max(0, Math.min(LEVELS.length - 1, S.rounds[n - 1].level + move)); S.lastCoachRound = c.afterRound; S.coachUsed++; beginRound(lvl, items ? 'coach' : 'ladder', items || undefined, typeof c.note === 'string' ? c.note.slice(0, 240) : null); renderItem(false); const q = curItem(); if (S.cur.note){ freeze(S.cur.note + ' ' + (q.say || q.text)); say(S.cur.note, 'gloss').then(() => say(q.say || q.text, 'reply')); } else { freeze(q.say || q.text); say(q.say || q.text, 'reply'); } scrollTo({ top: 0 }); return; }
+  beginRound(Math.max(0, Math.min(LEVELS.length - 1, S.rounds[n - 1].level + move)), 'ladder'); renderItem(true); scrollTo({ top: 0 });
+}
+
+/* ---------- finish ---------- */
+function climbStates(){
+  const st = {};
+  for (const r of S.rounds) for (const a of r.items){ const v = st[a.std] || { ok: 0, no: 0 }; a.ok ? v.ok++ : v.no++; st[a.std] = v; }
+  const out = {}; for (const k in st) out[k] = st[k].no === 0 ? 'met' : st[k].ok === 0 ? 'missed' : 'mixed';
+  return out;
+}
+function summarize(place){
+  const can = [], next = [], seen = new Set();
+  for (const r of S.rounds) for (const a of r.items){ const nm = STD_NAME[a.std] || a.std; if (seen.has(nm + a.ok)) continue; seen.add(nm + a.ok); (a.ok ? can : next).push(nm); }
+  const rank = nm => { const i = Object.keys(STD_NAME).findIndex(k => STD_NAME[k] === nm); return i < 0 ? -1 : i; };
+  const nextUp = next.filter(x => !can.includes(x)); const upStds = LEVELS[Math.min(LEVELS.length - 1, place + 1)].stds.map(s => STD_NAME[s] || s);
+  return { can: [...new Set(can)].sort((a, b) => rank(b) - rank(a)).slice(0, 5), next: (nextUp.length ? nextUp : upStds).slice(0, 4) };
+}
+function finish(place, coachPlacement){
+  const L = LEVELS[place]; const sum = summarize(place);
+  const p = coachPlacement ? Object.assign({ level: place, label: L.label, at: nowIso() }, coachPlacement, { can: coachPlacement.can || sum.can, next: coachPlacement.next || sum.next }) : { level: place, label: L.label, at: nowIso(), can: sum.can, next: sum.next, note: null, report: null, by: 'ladder' };
+  p.states = climbStates(); p.rounds = S.rounds.length; p.right = S.rounds.reduce((s, r) => s + r.score, 0); p.of = S.rounds.reduce((s, r) => s + r.of, 0);
+  S.placement = p; S.done = true; S.cur = null; S.level = place; saveSession(true);
+  if (db){ try { db.doc(`data/users/${self}/placement`).set(p).catch(() => {}); db.doc(`data/users/${self}/profile`).set({ level: place, updatedAt: nowIso() }).catch(() => {}); } catch {} }
+  const rungName = L.label === 'K' ? 'Kindergarten' : L.label.replace('Gr ', 'Grade ');
+  $('finTitle').textContent = `The ${rungName} rung`;
+  $('finStats').innerHTML = `<div class="stat"><span class="k">Rung</span><div class="v">${esc(L.label.toUpperCase())}</div></div><div class="stat"><span class="k">Rounds</span><div class="v">${S.rounds.length}</div></div><div class="stat"><span class="k">Right</span><div class="v">${p.right}<small>/ ${p.of}</small></div></div>`;
+  $('finNote').textContent = p.note || (p.can.length ? `You can do ${p.can.slice(0, 2).join(' and ')}. Next time we try ${p.next[0] || 'the next rung'}.` : `Next time we try ${p.next[0] || 'counting'} together.`);
+  $('finCan').innerHTML = p.can.map(x => `<span class="k-pill" data-kind="can">${esc(x)}</span>`).join('') || '<span class="k">Warming up</span>';
+  $('finNext').innerHTML = p.next.map(x => `<span class="k-pill" data-kind="next">${esc(x)}</span>`).join('');
+  $('play').hidden = true; $('home').hidden = false; document.body.classList.remove('reading'); renderHome(); $('finSheet').hidden = false;
+  if (hasSprout && sprout.progress && typeof sprout.progress.hide === 'function'){ try { sprout.progress.hide(); } catch {} }
+  say(`You climbed to the ${L.say} rung. ${$('finNote').textContent}`);
+}
+function finishTap(){
+  $('finSheet').hidden = true; quiet();
+  const p = S.placement; const summary = p ? `Math Climb: ${p.label} rung after ${S.rounds.length} round${S.rounds.length === 1 ? '' : 's'} (${p.right}/${p.of}). Can: ${p.can.join(', ') || 'warming up'}. Next: ${p.next.join(', ')}.` : 'Math Climb finished';
+  if (hasSprout && typeof sprout.complete === 'function'){ try { sprout.complete({ summary }); } catch {} }
+  $('bStart').disabled = true; $('homeStatus').textContent = 'All done for today.';
+}
+if (hasSprout && typeof sprout.onBackPress === 'function') sprout.onBackPress(() => { if (!$('finSheet').hidden || !$('roundSheet').hidden) return true; if ($('play').hidden) return false; goHome(); return true; });
+
+/* ---------- Sprout moves: the live Sprout can read, hint, explain, start and finish ---------- */
+function registerMoves(){
+  if (!hasSprout || !sprout.actions || typeof sprout.actions.register !== 'function') return;
+  const here = () => { const it = curItem(); return { screen: $('play').hidden ? 'home' : 'play', rung: LEVELS[S.cur ? S.cur.level : S.level].label, round: S.rounds.length + (S.cur ? 1 : 0), question: it ? it.text : null, choices: it ? it.choices.map(c => c.v) : null, answered: !!(it && S.cur.answers[S.cur.i]), rounds: S.rounds.map(r => `${LEVELS[r.level].label} ${r.score}/${r.of}`) }; };
+  const reg = (name, description, fn) => { try { sprout.actions.register(name, { description, inputSchema: { type: 'object', properties: {} } }, fn); } catch {} };
+  reg('where_are_we', 'Where the climb is: screen, rung, round, the question on screen and its choices. Call this before helping. The canvas already reads questions and feedback aloud itself, so stay quiet unless the kid asks you something.', here);
+  reg('read_question', 'Read the question on screen aloud again in the canvas voice. Returns the question text.', () => { const it = curItem(); if (!it) return { ok: false, reason: 'no question on screen' }; replay(); return { question: it.text, choices: it.choices.map(c => c.v) }; });
+  reg('give_hint', 'Show and speak the hint for the question on screen. Returns the hint so you can say it your own way. Never gives the answer.', () => { const it = curItem(); if (!it || S.cur.answers[S.cur.i]) return { ok: false, reason: 'nothing to hint' }; hint(); return { hint: it.hint, skill: it.lc || STD_NAME[it.std] || it.std }; });
+  reg('explain_question', 'After the kid answered: draw the working on screen and return the right answer, what the kid picked, the trap behind a wrong pick (a Learning Commons misconception) and the skill, so you can explain it in your own words.', () => { const it = curItem(); if (!it) return { ok: false, reason: 'no question on screen' }; const a = S.cur.answers[S.cur.i]; if (!a) return { ok: false, reason: 'not answered yet; use give_hint' }; showMe(); return { question: it.text, answer: it.ans, picked: a.picked, correct: a.ok, trap: a.tag ? { tag: a.tag, inKidWords: trapLine(it, a.picked, a.tag) } : null, skill: it.lc || STD_NAME[it.std] || it.std, standard: it.std, working: it.why }; });
+  reg('next_question', 'Move on after the kid has answered and heard the feedback.', () => { if (!S.cur || !S.cur.answers[S.cur.i]) return { ok: false, reason: 'not answered yet' }; next(); return here(); });
+  reg('start_climbing', 'Start or resume the climb from the home screen.', () => { if (!$('play').hidden) return { ok: false, reason: 'already climbing' }; if ($('bStart').disabled) return { ok: false, reason: 'finished for today' }; startClimb(); return here(); });
+  reg('keep_going', 'Close the end-of-round sheet and begin the next round.', () => { if ($('roundSheet').hidden) return { ok: false, reason: 'no round sheet open' }; afterRound(); return here(); });
+  reg('finish_climb', 'Finish the whole climb now and place the kid on the best rung so far.', () => { if (S.done) return { ok: false, reason: 'already finished' }; if (S.cur && S.cur.answers.length){ const r = S.cur; S.rounds.push({ level: r.level, score: r.answers.filter(a => a && a.ok).length, of: r.answers.filter(Boolean).length, source: r.source, items: r.answers.filter(Boolean), note: r.note }); } S.cur = null; $('roundSheet').hidden = true; const pm = passedMap(); let best = -1; for (const k in pm) if (pm[k]) best = Math.max(best, +k); finish(best >= 0 ? best : S.level); return { placed: S.placement.label, can: S.placement.can, next: S.placement.next }; });
+}
+
+/* ---------- parent view: every kid's climb, and the map to traverse ---------- */
+const PV = { kids: [], kid: null, placement: {}, sessions: {}, sel: null, whole: false, subs: [] };
+function parentBoot(roster){
+  document.documentElement.dataset.view = 'parent';
+  PV.kids = (roster.kids || []).filter(k => k && k.id && k.name);
+  $('tabs').innerHTML = PV.kids.map(k => `<button class="act" type="button" data-kid="${esc(k.id)}" aria-pressed="false">${esc(k.name)}</button>`).join('');
+  $('tabs').addEventListener('click', e => { const b = e.target.closest('[data-kid]'); if (b) selectKid(b.dataset.kid); });
+  $('map').addEventListener('click', e => { const g = e.target.closest('.n'); if (g) selectNode(g.dataset.code); });
+  $('explain').addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (b) selectNode(b.dataset.go); });
+  for (const k of PV.kids){
+    try { PV.subs.push(db.doc(`data/users/${k.id}/placement`).onSnapshot(s => { PV.placement[k.id] = s.exists ? s.data() : null; if (PV.kid === k.id) renderParent(); }, () => {})); } catch {}
+    try { PV.subs.push(db.collection(`data/users/${k.id}/climb/sessions`).onSnapshot(q => { PV.sessions[k.id] = q.docs.map(d => Object.assign({ id: d.id }, d.data())); if (PV.kid === k.id) renderParent(); }, () => {})); } catch {}
+  }
+  if (PV.kids.length) selectKid(PV.kids[0].id); else $('pStatus').textContent = 'No kids on the roster yet.';
+}
+function selectKid(id){ PV.kid = id; PV.sel = null; document.querySelectorAll('#tabs .act').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.kid === id))); renderParent(); }
+function toggleScope(){ PV.whole = !PV.whole; $('bScope').setAttribute('aria-pressed', String(PV.whole)); $('bScope').textContent = PV.whole ? 'Just the climb' : 'Whole map'; renderParent(); }
+function kidStats(id){
+  const sess = (PV.sessions[id] || []).slice().sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+  const st = {}; const answers = {}; let right = 0, of = 0;
+  for (const s of sess) for (const r of (s.rounds || [])) for (const a of (r.items || [])){ if (!a || !a.std) continue; const v = st[a.std] || { ok: 0, no: 0 }; a.ok ? v.ok++ : v.no++; st[a.std] = v; (answers[a.std] = answers[a.std] || []).push(a); right += a.ok ? 1 : 0; of++; }
+  const states = {}; for (const k in st) states[k] = st[k].no === 0 ? 'met' : st[k].ok === 0 ? 'missed' : 'mixed';
+  const p = PV.placement[id]; if (p && p.graph && p.graph.states) for (const k in p.graph.states) if (!states[k] && p.graph.states[k] === 'next') states[k] = 'next';
+  return { sess, states, answers, right, of, placement: p };
+}
+function renderParent(){
+  const id = PV.kid; if (!id) return; const k = PV.kids.find(x => x.id === id); const d = kidStats(id); const p = d.placement;
+  const rung = p && p.label ? p.label : (d.sess[0] && Number.isInteger(d.sess[0].level) ? LEVELS[d.sess[0].level].label : '–');
+  $('pStats').innerHTML = `<div class="stat"><span class="k">Rung</span><div class="v">${esc(rung.toUpperCase())}</div></div><div class="stat"><span class="k">Climbs</span><div class="v">${d.sess.length}</div></div><div class="stat"><span class="k">Right</span><div class="v">${d.of ? Math.round(100 * d.right / d.of) : 0}<small>%</small></div></div>`;
+  drawMap(d.states, p && Number.isInteger(p.level) ? p.level : null, p && p.graph);
+  renderExplain(d);
+  $('pNoteK').textContent = p && p.at ? new Date(p.at).toLocaleDateString() : '';
+  $('pNote').textContent = p && (p.report || p.note) ? [p.note, p.report].filter(Boolean).join('\n\n') : (p ? `${k.name} climbed to the ${p.label} rung. Can: ${(p.can || []).join(', ') || 'warming up'}. Next: ${(p.next || []).join(', ')}.` : 'No report yet. The coach writes one after a climb.');
+  $('pClimbK').textContent = d.sess.length ? `${d.right} right of ${d.of}` : '';
+  $('climbs').innerHTML = d.sess.map(s => { const path = (s.rounds || []).map(r => `${r.levelLabel || LEVELS[r.level].label} ${r.score}/${r.of}`).join(' → '); const traps = [...new Set((s.rounds || []).flatMap(r => (r.items || []).filter(a => a && !a.ok && a.tag).map(a => a.tag)))]; return `<div class="cont"><span style="flex:1;min-width:0"><span class="k">${esc(new Date(s.startedAt || 0).toLocaleDateString())} · ${s.status === 'done' ? 'finished' : 'in progress'}</span><br><span class="t">${esc(path || 'no rounds yet')}</span>${traps.length ? `<br><span class="skills" style="margin:6px 0 0">${traps.map(t => `<span class="k-pill" data-kind="trap">${esc(t)}</span>`).join('')}</span>` : ''}</span></div>`; }).join('') || '<p class="empty">No climbs yet.</p>';
+}
+const gradeOf = c => GRAPH.nodes[c] ? GRAPH.nodes[c].g : (c.startsWith('K.') ? 0 : parseInt(c, 10) || 0);
+const placeGrade = level => level <= 1 ? 0 : level - 1;
+function drawMap(states, place, extra){
+  const nodes = Object.assign({}, GRAPH.nodes), edges = GRAPH.edges.slice();
+  if (extra && extra.nodes) for (const c in extra.nodes){ const n = extra.nodes[c]; if (n && Number.isInteger(n.g) && typeof n.n === 'string' && !nodes[c]) nodes[c] = { g: Math.max(0, Math.min(8, n.g)), n: n.n.slice(0, 60), d: typeof n.d === 'string' ? n.d.slice(0, 420) : '', lc: Array.isArray(n.lc) ? n.lc.slice(0, 8).map(String) : [] }; }
+  if (extra && Array.isArray(extra.edges)) for (const e of extra.edges) if (Array.isArray(e) && nodes[e[0]] && nodes[e[1]]) edges.push([e[0], e[1]]);
+  PV.nodes = nodes; PV.edges = edges;
+  let keep;
+  if (PV.whole) keep = new Set(Object.keys(nodes));
+  else { keep = new Set(Object.keys(states).filter(c => nodes[c])); if (PV.sel && nodes[PV.sel]) keep.add(PV.sel); const near = new Set(); for (const [a, b] of edges){ if (keep.has(a) && !keep.has(b)) near.add(b); if (keep.has(b) && !keep.has(a)) near.add(a); } for (const c of [...near].filter(x => nodes[x].l || x === PV.sel)) keep.add(c); if (!keep.size) for (const L of LEVELS) for (const c of L.stds) keep.add(c); }
+  const cols = [...new Set([...keep].map(c => nodes[c].g))].sort((a, b) => a - b);
+  const byCol = cols.map(g => [...keep].filter(c => nodes[c].g === g).sort());
+  const W = 560, colW = W / Math.max(1, cols.length), rowH = PV.whole ? 30 : 60, maxRows = Math.max(...byCol.map(c => c.length)), H = 30 + maxRows * rowH + 20;
+  const pos = {}; byCol.forEach((list, ci) => { const top = 30 + (maxRows - list.length) * rowH / 2; list.forEach((c, ri) => { pos[c] = [colW * ci + colW / 2, top + ri * rowH + rowH / 2]; }); });
+  const svg = $('map'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = '';
+  cols.forEach((g, ci) => { if (place != null && g === placeGrade(place)) svg.append(rect(colW * ci + 2, 2, colW - 4, H - 4, C.tag, { stroke: 'none' })); svg.append(txt(g === 0 ? 'K' : 'GR ' + g, colW * ci + colW / 2, 12, 11, { class: 'gl' })); });
+  for (const [a, b] of edges){ if (!pos[a] || !pos[b]) continue; const [x1, y1] = pos[a], [x2, y2] = pos[b]; const pth = document.createElementNS(NS, 'path'); const mx = (x1 + x2) / 2; pth.setAttribute('d', `M${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`); pth.setAttribute('class', 'e' + ((PV.sel && (a === PV.sel || b === PV.sel)) || (states[a] && states[b]) ? ' hot' : '')); svg.append(pth); }
+  for (const c of keep){ const [x, y] = pos[c], st = states[c], r = PV.whole ? 7 : 12; const g = document.createElementNS(NS, 'g'); g.setAttribute('class', 'n' + (st ? ' ' + st : ' near') + (c === PV.sel ? ' sel' : '')); g.dataset.code = c; g.append(circ(x, y, r, C.card)); const tt = document.createElementNS(NS, 'title'); tt.textContent = c + ': ' + (STD_NAME[c] || nodes[c].n); g.append(tt);
+    if (!PV.whole || st || c === PV.sel){ const nm = STD_NAME[c] || nodes[c].n; const lim = PV.whole ? 16 : Math.max(12, Math.floor(colW / 5.4)); const w1 = nm.length > lim ? nm.slice(0, lim).replace(/\s+\S*$/, '') : nm; const w2 = nm.length > lim ? nm.slice(w1.length).trim() : ''; g.append(txt(w1.length > lim ? w1.slice(0, lim - 1) + '…' : w1, x, y + r + 9, PV.whole ? 8 : 9)); if (w2 && !PV.whole) g.append(txt(w2.length > lim ? w2.slice(0, lim - 1) + '…' : w2, x, y + r + 19, 9)); g.append(txt(c, x, y - r - 7, 8, { fill: C.muted })); }
+    svg.append(g); }
+  if (place != null){ const ci = cols.indexOf(placeGrade(place)); if (ci >= 0){ const x = colW * ci + colW / 2; const f = document.createElementNS(NS, 'path'); f.setAttribute('d', `M${x - 22} ${H - 2} l0 -18 l30 7 l-30 7`); f.setAttribute('fill', C.tomato); f.setAttribute('stroke', INK); svg.append(f); svg.append(txt('YOU', x - 7, H - 13, 8, { fill: C.paper, 'font-weight': 900 })); } }
+}
+function selectNode(code){ PV.sel = code === PV.sel ? null : code; renderParent(); if (PV.sel) $('explain').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+function renderExplain(d){
+  const c = PV.sel, box = $('explain');
+  if (!c || !PV.nodes[c]){ box.innerHTML = '<p class="status">Tap a circle on the map to read what it means and how it went.</p>'; return; }
+  const n = PV.nodes[c], st = d.states[c], ans = d.answers[c] || [];
+  const before = PV.edges.filter(e => e[1] === c).map(e => e[0]).filter(x => PV.nodes[x]), after = PV.edges.filter(e => e[0] === c).map(e => e[1]).filter(x => PV.nodes[x]);
+  const ladderKey = Object.keys(GEN).find(k => k === c || k === 'PK:' + c); let example = null; try { if (ladderKey) example = GEN[ladderKey](); } catch {}
+  const mark = st === 'met' ? '✓' : st === 'missed' ? '×' : st === 'mixed' ? '~' : '';
+  box.innerHTML = `<div class="row"><span class="k-pill" data-kind="grade">${n.g === 0 ? 'K' : 'Grade ' + n.g}</span><span class="k-pill">${esc(c)}</span>${st ? `<span class="k-pill" data-kind="${st === 'met' ? 'can' : st === 'next' ? 'next' : 'trap'}">${st === 'met' ? 'got it' : st === 'missed' ? 'not yet' : st === 'mixed' ? 'some' : 'next up'}</span>` : ''}</div>`
+    + `<b style="font:600 20px/1.25 var(--read)">${esc(cap(STD_NAME[c] || n.n))}</b>`
+    + `<p>${esc(n.d || 'No description baked in for this one.')}</p>`
+    + (n.lc && n.lc.length ? `<div class="k" style="margin-top:10px">Smaller skills</div><ul class="lcs">${n.lc.map(x => `<li><i class="${st || ''}">${mark}</i><span>${esc(x)}</span></li>`).join('')}</ul>` : '')
+    + (ans.length ? `<div class="k" style="margin-top:10px">In the climb · ${ans.filter(a => a.ok).length} right of ${ans.length}</div><ul class="answers">${ans.slice(-6).map(a => `<li><span class="k-pill" data-kind="${a.ok ? 'can' : 'trap'}">${a.ok ? 'right' : esc(a.tag || 'wrong')}</span><span>${esc(a.text)} ${a.ok ? '' : `(picked ${esc(a.picked)}, answer ${esc(a.ans)})`}</span></li>`).join('')}</ul>` : `<p class="status" style="margin-top:8px">Not tried yet.</p>`)
+    + (example ? `<div class="k" style="margin-top:10px">A question like this</div><p>${esc(example.text)}</p><div class="pic" id="exPic" hidden></div>` : '')
+    + `<div class="k" style="margin-top:10px">Before</div><div class="hops">${before.map(x => `<button class="act before" type="button" data-go="${esc(x)}">${esc(x)} · ${esc(STD_NAME[x] || PV.nodes[x].n)}</button>`).join('') || '<span class="status">Start of the map</span>'}</div>`
+    + `<div class="k" style="margin-top:10px">After</div><div class="hops">${after.map(x => `<button class="act after" type="button" data-go="${esc(x)}">${esc(x)} · ${esc(STD_NAME[x] || PV.nodes[x].n)}</button>`).join('') || '<span class="status">End of the map</span>'}</div>`;
+  if (example){ const pic = picFor(example, false); if (pic){ $('exPic').append(pic); $('exPic').hidden = false; } }
+}
+
+/* ---------- boot: who opened the page decides the view ---------- */
+(async () => {
+  const hold = hasSprout && sprout.loading && typeof sprout.loading.begin === 'function' ? sprout.loading.begin('Finding your rung') : null;
+  let roster = null, who = null;
+  try { await openDb(); } catch {}
+  if (db){ try { const snap = await db.doc('family/roster').get(); roster = snap.exists ? snap.data() : null; } catch {} }
+  const kids = roster && Array.isArray(roster.kids) ? roster.kids : [];
+  const onRoster = kids.some(k => k && k.id === self);
+  if (!onRoster && hasSprout && typeof sprout.whoami === 'function'){ try { who = await sprout.whoami(); } catch {} }
+  const parent = !onRoster && !(who && who.principalType === 'child') && (kids.length > 0 || (who && who.principalType === 'parent'));
+  try { hold && hold.ready(); } catch {}
+  if (parent){ parentBoot(roster); return; }
+  document.documentElement.dataset.view = 'kid';
+  registerMoves(); renderHome();
+  if (S.done && S.placement) { /* a finished run reopens on the home screen with the last rung */ }
+  else if (S.cur) startClimb();
+})();
+</script></body></html>
