@@ -155,12 +155,13 @@
 
 <!-- ===================== parent view ===================== -->
 <div id="parent">
-  <header class="top"><h1>Math Climb</h1><span>For grown-ups · how the climb is going</span></header>
+  <header class="top"><h1>Math Climb</h1><span>For grown-ups · toward the New York State math test</span></header>
   <div class="tabs" id="tabs"></div>
   <div class="finstats" id="pStats"></div>
+  <p class="pnote" id="pTrack"></p>
   <div class="stage" aria-label="The map">
     <svg id="map" role="img" aria-label="The knowledge map: standards as circles by grade, links from the Learning Commons progression, colored by how the kid did. Tap one to read about it."></svg>
-    <p class="figcap">Fig. 02 · The map · tap a standard</p>
+    <p class="figcap">Fig. 02 · The map · New York Next Generation standards · tap one</p>
     <p class="legend"><i class="met"></i>got it <i class="mixed"></i>some <i class="missed"></i>not yet <i class="near"></i>not tried</p>
     <div class="tools" style="margin-top:8px"><button class="act" type="button" id="bScope" onclick="toggleScope()" aria-pressed="false">Whole map</button></div>
   </div>
@@ -633,6 +634,7 @@ function renderParent(){
   const id = PV.kid; if (!id) return; const k = PV.kids.find(x => x.id === id); const d = kidStats(id); const p = d.placement;
   const rung = p && p.label ? p.label : (d.sess[0] && Number.isInteger(d.sess[0].level) ? LEVELS[d.sess[0].level].label : '–');
   $('pStats').innerHTML = `<div class="stat"><span class="k">Rung</span><div class="v">${esc(rung.toUpperCase())}</div></div><div class="stat"><span class="k">Climbs</span><div class="v">${d.sess.length}</div></div><div class="stat"><span class="k">Right</span><div class="v">${d.of ? Math.round(100 * d.right / d.of) : 0}<small>%</small></div></div>`;
+  $('pTrack').textContent = trackLine(p, d);
   drawMap(d.states, p && Number.isInteger(p.level) ? p.level : null, p && p.graph);
   renderExplain(d);
   $('pNoteK').textContent = p && p.at ? new Date(p.at).toLocaleDateString() : '';
@@ -640,11 +642,19 @@ function renderParent(){
   $('pClimbK').textContent = d.sess.length ? `${d.right} right of ${d.of}` : '';
   $('climbs').innerHTML = d.sess.map(s => { const path = (s.rounds || []).map(r => `${r.levelLabel || LEVELS[r.level].label} ${r.score}/${r.of}`).join(' → '); const traps = [...new Set((s.rounds || []).flatMap(r => (r.items || []).filter(a => a && !a.ok && a.tag).map(a => a.tag)))]; return `<div class="cont"><span style="flex:1;min-width:0"><span class="k">${esc(new Date(s.startedAt || 0).toLocaleDateString())} · ${s.status === 'done' ? 'finished' : 'in progress'}</span><br><span class="t">${esc(path || 'no rounds yet')}</span>${traps.length ? `<br><span class="skills" style="margin:6px 0 0">${traps.map(t => `<span class="k-pill" data-kind="trap">${esc(t)}</span>`).join('')}</span>` : ''}</span></div>`; }).join('') || '<p class="empty">No climbs yet.</p>';
 }
+// The state test starts in grade 3. A rung at grade 3 or above reads against that grade's test; below it, the climb is the run-up.
+function trackLine(p, d){
+  if (!p || !Number.isInteger(p.level)) return 'No climb yet. The first climb places a rung; the map then reads against the New York State math test for grades 3 to 5.';
+  const g = placeGrade(p.level), met = Object.values(d.states).filter(x => x === 'met').length, tried = Object.keys(d.states).length;
+  if (g >= 3){ const stds = LEVELS[p.level].stds, ok = stds.filter(c => d.states[c] === 'met').length; return `On the Grade ${g} rung: ${ok} of ${stds.length} tested Grade ${g} standards met so far. The Grade ${g} New York State math test covers this grade's standards; the map shows which are in place and what comes before them.`; }
+  const name = LEVELS[p.level].label === 'K' ? 'Kindergarten' : LEVELS[p.level].label;
+  return `On the ${name} rung, ${3 - g} grade${3 - g === 1 ? '' : 's'} before the first New York State math test (Grade 3). ${met} of ${tried} standards tried are in place; the map shows the path up to the Grade 3 test.`;
+}
 const gradeOf = c => GRAPH.nodes[c] ? GRAPH.nodes[c].g : (c.startsWith('K.') ? 0 : parseInt(c, 10) || 0);
 const placeGrade = level => level <= 1 ? 0 : level - 1;
 function drawMap(states, place, extra){
   const nodes = Object.assign({}, GRAPH.nodes), edges = GRAPH.edges.slice();
-  if (extra && extra.nodes) for (const c in extra.nodes){ const n = extra.nodes[c]; if (n && Number.isInteger(n.g) && typeof n.n === 'string' && !nodes[c]) nodes[c] = { g: Math.max(0, Math.min(8, n.g)), n: n.n.slice(0, 60), d: typeof n.d === 'string' ? n.d.slice(0, 420) : '', lc: Array.isArray(n.lc) ? n.lc.slice(0, 8).map(String) : [] }; }
+  if (extra && extra.nodes) for (const c in extra.nodes){ const n = extra.nodes[c]; if (n && Number.isInteger(n.g) && typeof n.n === 'string' && !nodes[c]) nodes[c] = { g: Math.max(0, Math.min(8, n.g)), n: n.n.slice(0, 60), d: typeof n.d === 'string' ? n.d.slice(0, 420) : '', lc: Array.isArray(n.lc) ? n.lc.slice(0, 8).map(String) : [], ny: n.ny && typeof n.ny.c === 'string' ? { c: n.ny.c.slice(0, 20), d: typeof n.ny.d === 'string' ? n.ny.d.slice(0, 420) : '' } : null }; }
   if (extra && Array.isArray(extra.edges)) for (const e of extra.edges) if (Array.isArray(e) && nodes[e[0]] && nodes[e[1]]) edges.push([e[0], e[1]]);
   PV.nodes = nodes; PV.edges = edges;
   let keep;
@@ -655,10 +665,10 @@ function drawMap(states, place, extra){
   const W = 560, colW = W / Math.max(1, cols.length), rowH = PV.whole ? 30 : 60, maxRows = Math.max(...byCol.map(c => c.length)), H = 30 + maxRows * rowH + 20;
   const pos = {}; byCol.forEach((list, ci) => { const top = 30 + (maxRows - list.length) * rowH / 2; list.forEach((c, ri) => { pos[c] = [colW * ci + colW / 2, top + ri * rowH + rowH / 2]; }); });
   const svg = $('map'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = '';
-  cols.forEach((g, ci) => { if (place != null && g === placeGrade(place)) svg.append(rect(colW * ci + 2, 2, colW - 4, H - 4, C.tag, { stroke: 'none' })); svg.append(txt(g === 0 ? 'K' : 'GR ' + g, colW * ci + colW / 2, 12, 11, { class: 'gl' })); });
+  cols.forEach((g, ci) => { if (place != null && g === placeGrade(place)) svg.append(rect(colW * ci + 2, 2, colW - 4, H - 4, C.tag, { stroke: 'none' })); svg.append(txt(g === 0 ? 'K' : g >= 3 && g <= 8 ? 'GR ' + g + ' TEST' : 'GR ' + g, colW * ci + colW / 2, 12, 11, { class: 'gl' })); });
   for (const [a, b] of edges){ if (!pos[a] || !pos[b]) continue; const [x1, y1] = pos[a], [x2, y2] = pos[b]; const pth = document.createElementNS(NS, 'path'); const mx = (x1 + x2) / 2; pth.setAttribute('d', `M${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`); pth.setAttribute('class', 'e' + ((PV.sel && (a === PV.sel || b === PV.sel)) || (states[a] && states[b]) ? ' hot' : '')); svg.append(pth); }
   for (const c of keep){ const [x, y] = pos[c], st = states[c], r = PV.whole ? 7 : 12; const g = document.createElementNS(NS, 'g'); g.setAttribute('class', 'n' + (st ? ' ' + st : ' near') + (c === PV.sel ? ' sel' : '')); g.dataset.code = c; g.append(circ(x, y, r, C.card)); const tt = document.createElementNS(NS, 'title'); tt.textContent = c + ': ' + (STD_NAME[c] || nodes[c].n); g.append(tt);
-    if (!PV.whole || st || c === PV.sel){ const nm = STD_NAME[c] || nodes[c].n; const lim = PV.whole ? 16 : Math.max(12, Math.floor(colW / 5.4)); const w1 = nm.length > lim ? nm.slice(0, lim).replace(/\s+\S*$/, '') : nm; const w2 = nm.length > lim ? nm.slice(w1.length).trim() : ''; g.append(txt(w1.length > lim ? w1.slice(0, lim - 1) + '…' : w1, x, y + r + 9, PV.whole ? 8 : 9)); if (w2 && !PV.whole) g.append(txt(w2.length > lim ? w2.slice(0, lim - 1) + '…' : w2, x, y + r + 19, 9)); g.append(txt(c, x, y - r - 7, 8, { fill: C.muted })); }
+    if (!PV.whole || st || c === PV.sel){ const nm = STD_NAME[c] || nodes[c].n; const lim = PV.whole ? 16 : Math.max(12, Math.floor(colW / 5.4)); const w1 = nm.length > lim ? nm.slice(0, lim).replace(/\s+\S*$/, '') : nm; const w2 = nm.length > lim ? nm.slice(w1.length).trim() : ''; g.append(txt(w1.length > lim ? w1.slice(0, lim - 1) + '…' : w1, x, y + r + 9, PV.whole ? 8 : 9)); if (w2 && !PV.whole) g.append(txt(w2.length > lim ? w2.slice(0, lim - 1) + '…' : w2, x, y + r + 19, 9)); g.append(txt(nodes[c].ny && nodes[c].ny.c ? nodes[c].ny.c : c, x, y - r - 7, 8, { fill: C.muted })); }
     svg.append(g); }
   if (place != null){ const ci = cols.indexOf(placeGrade(place)); if (ci >= 0){ const x = colW * ci + colW / 2; const f = document.createElementNS(NS, 'path'); f.setAttribute('d', `M${x - 22} ${H - 2} l0 -18 l30 7 l-30 7`); f.setAttribute('fill', C.tomato); f.setAttribute('stroke', INK); svg.append(f); svg.append(txt('YOU', x - 7, H - 13, 8, { fill: C.paper, 'font-weight': 900 })); } }
 }
@@ -670,9 +680,10 @@ function renderExplain(d){
   const before = PV.edges.filter(e => e[1] === c).map(e => e[0]).filter(x => PV.nodes[x]), after = PV.edges.filter(e => e[0] === c).map(e => e[1]).filter(x => PV.nodes[x]);
   const ladderKey = Object.keys(GEN).find(k => k === c || k === 'PK:' + c); let example = null; try { if (ladderKey) example = GEN[ladderKey](); } catch {}
   const mark = st === 'met' ? '✓' : st === 'missed' ? '×' : st === 'mixed' ? '~' : '';
-  box.innerHTML = `<div class="row"><span class="k-pill" data-kind="grade">${n.g === 0 ? 'K' : 'Grade ' + n.g}</span><span class="k-pill">${esc(c)}</span>${st ? `<span class="k-pill" data-kind="${st === 'met' ? 'can' : st === 'next' ? 'next' : 'trap'}">${st === 'met' ? 'got it' : st === 'missed' ? 'not yet' : st === 'mixed' ? 'some' : 'next up'}</span>` : ''}</div>`
+  const ny = n.ny && n.ny.c ? n.ny : null;
+  box.innerHTML = `<div class="row"><span class="k-pill" data-kind="grade">${n.g === 0 ? 'K' : 'Grade ' + n.g}</span>${ny ? `<span class="k-pill" data-kind="you">${esc(ny.c)}</span>` : ''}<span class="k-pill">${esc(c)}</span>${st ? `<span class="k-pill" data-kind="${st === 'met' ? 'can' : st === 'next' ? 'next' : 'trap'}">${st === 'met' ? 'got it' : st === 'missed' ? 'not yet' : st === 'mixed' ? 'some' : 'next up'}</span>` : ''}</div>`
     + `<b style="font:600 20px/1.25 var(--read)">${esc(cap(STD_NAME[c] || n.n))}</b>`
-    + `<p>${esc(n.d || 'No description baked in for this one.')}</p>`
+    + `<p>${esc((ny && ny.d) || n.d || 'No description baked in for this one.')}</p>` + (ny && ny.d && ny.d !== n.d ? `<p class="status" style="margin-top:6px">Common Core ${esc(c)}: ${esc(n.d)}</p>` : '')
     + (n.lc && n.lc.length ? `<div class="k" style="margin-top:10px">Smaller skills</div><ul class="lcs">${n.lc.map(x => `<li><i class="${st || ''}">${mark}</i><span>${esc(x)}</span></li>`).join('')}</ul>` : '')
     + (ans.length ? `<div class="k" style="margin-top:10px">In the climb · ${ans.filter(a => a.ok).length} right of ${ans.length}</div><ul class="answers">${ans.slice(-6).map(a => `<li><span class="k-pill" data-kind="${a.ok ? 'can' : 'trap'}">${a.ok ? 'right' : esc(a.tag || 'wrong')}</span><span>${esc(a.text)} ${a.ok ? '' : `(picked ${esc(a.picked)}, answer ${esc(a.ans)})`}</span></li>`).join('')}</ul>` : `<p class="status" style="margin-top:8px">Not tried yet.</p>`)
     + (example ? `<div class="k" style="margin-top:10px">A question like this</div><p>${esc(example.text)}</p><div class="pic" id="exPic" hidden></div>` : '')
