@@ -8,6 +8,6 @@ A Sprout canvas (stage) where a kid climbs rungs of math, Pre-K to Grade 5, in r
 - `coach/lc.mjs`: Learning Commons Knowledge Graph MCP over plain HTTP, for a routine that cannot mount MCP servers.
 - `qa/walk.mjs`: headless walk with a stub Sprout host (playwright-core + a local Chromium).
 
-Data (canvas db): `data/users/<kid>/profile {level}`, `data/users/<kid>/sessions/<sid>` (rounds, items, tags), `.../coach/next`, `data/users/<kid>/placement`.
+Data (canvas db): `data/users/<kid>/profile {level}`, `data/users/<kid>/climb/sessions/<sid>` (rounds, items, tags), `.../coach/next`, `data/users/<kid>/placement`.
 
 Secrets live in env, never here.

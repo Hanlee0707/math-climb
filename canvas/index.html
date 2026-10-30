@@ -10,7 +10,7 @@
   session from the canvas db, walks the Learning Commons progression map, and may write the next round
   (`coach/next`) plus a grown-up report (`placement`). Sprout moves (`sprout.actions`) let the live
   Sprout read, hint, explain, start and finish.
-  Data: data/users/<self>/profile {level}, data/users/<self>/sessions/<sid>, .../coach/next, data/users/<self>/placement.
+  Data: data/users/<self>/profile {level}, data/users/<self>/climb/sessions/<sid>, .../coach/next, data/users/<self>/placement.
 -->
 <style>
 :root{--ink:#23203a;--soft:#6f6a86;--paper:#fff8ee;--card:#ffffff;--coral:#ff6b4a;--coralD:#e4502f;--teal:#1fb6a6;--tealD:#15938a;--sun:#ffc93c;--sky:#cfeefb;--grass:#bfe8c8;--line:#eee4d4;--ok:#1fb6a6;--bad:#ff6b4a;--r:24px}
@@ -413,7 +413,7 @@ async function openDb(){
 let saveT = 0;
 function saveSession(now){
   if (!db || !S.sid) return;
-  const write = () => { try { db.doc(`data/users/${self}/sessions/${S.sid}`).set(sessionDoc()).catch(() => {}); } catch {} };
+  const write = () => { try { db.doc(`data/users/${self}/climb/sessions/${S.sid}`).set(sessionDoc()).catch(() => {}); } catch {} };
   clearTimeout(saveT); if (now) write(); else saveT = setTimeout(write, 500);
 }
 function sessionDoc(){
@@ -421,7 +421,7 @@ function sessionDoc(){
 }
 function watchCoach(){
   if (!db || !S.sid || unsubCoach) return;
-  try { unsubCoach = db.doc(`data/users/${self}/sessions/${S.sid}/coach/next`).onSnapshot(snap => { coach = snap.exists ? snap.data() : null; }, () => {}); } catch {}
+  try { unsubCoach = db.doc(`data/users/${self}/climb/sessions/${S.sid}/coach/next`).onSnapshot(snap => { coach = snap.exists ? snap.data() : null; }, () => {}); } catch {}
 }
 async function wake(round){
   if (!hasSprout || !sprout.net || typeof sprout.net.fetch !== 'function' || !self || !S.sid) return false;

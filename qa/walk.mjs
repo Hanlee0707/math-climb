@@ -9,12 +9,12 @@ const STUB = `
   window.__db = window.__db || {}; window.__log = []; window.__state = window.__state || {};
   const subs = {};
   const snap = (p) => ({ id: p.split('/').pop(), exists: p in __db, data: () => __db[p], metadata: { fromCache: false, hasPendingWrites: false } });
-  const docRef = (p) => ({ id: p.split('/').pop(), path: p,
+  const docRef = (p) => { if (p.split('/').length % 2) throw new TypeError('odd document path ' + p); return ({ id: p.split('/').pop(), path: p,
     async get(){ return snap(p); },
     async set(d){ __db[p] = JSON.parse(JSON.stringify(d)); __log.push(['set', p]); (subs[p] || []).forEach(f => f(snap(p))); },
     async update(d){ if (!(p in __db)) throw { code: 'invalid_argument' }; Object.assign(__db[p], d); (subs[p] || []).forEach(f => f(snap(p))); },
     async delete(){ delete __db[p]; },
-    onSnapshot(f){ (subs[p] = subs[p] || []).push(f); setTimeout(() => f(snap(p)), 0); return () => { subs[p] = subs[p].filter(x => x !== f); }; } });
+    onSnapshot(f){ (subs[p] = subs[p] || []).push(f); setTimeout(() => f(snap(p)), 0); return () => { subs[p] = subs[p].filter(x => x !== f); }; } }); };
   window.__push = (p, d) => { __db[p] = d; (subs[p] || []).forEach(f => f(snap(p))); };
   window.__spoken = [];
   window.sprout = { state: window.__state, whoami: () => ({ childName: 'Kid', ageTier: 'early', principalType: 'child' }),
@@ -43,7 +43,7 @@ for (let guard = 0; guard < 80; guard++) {
     if (policy === 'coach' && !coachPlanted) {
       coachPlanted = true;
       const sid = await page.evaluate(() => S.sid);
-      await page.evaluate(({ sid }) => __push(`data/users/kid-1/sessions/${sid}/coach/next`, { afterRound: 1, level: 1, note: 'Sprout here. Let us count a little higher together.', items: [
+      await page.evaluate(({ sid }) => __push(`data/users/kid-1/climb/sessions/${sid}/coach/next`, { afterRound: 1, level: 1, note: 'Sprout here. Let us count a little higher together.', items: [
         { std: 'K.CC.B.5', lc: 'count up to 20 objects', text: 'How many stars?', say: 'How many stars are there?', pic: { kind: 'dots', n: 9, emoji: '⭐', arr: 'array' }, choices: [{ v: '9' }, { v: '8', tag: 'off-by-one' }, { v: '10', tag: 'off-by-one' }], ans: '9', why: 'Count them: nine.', hint: 'Count in rows.' },
         { std: 'K.OA.A.2', text: '4 frogs and 3 more. How many?', pic: { kind: 'dots', n: 7, groups: [4, 3], emoji: '🐸', arr: 'line' }, choices: ['7', '6', { v: '4', tag: 'part' }], ans: '7', why: 'Four and three more is seven.' },
         { std: 'K.CC.C.6', text: 'Which is more, 6 or 4?', choices: [{ v: '6' }, { v: '4', tag: 'reversed' }], ans: '6', why: 'Six is more than four.' },
